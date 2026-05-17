@@ -1,0 +1,1 @@
+../node_modules/ghostty-web/dist/__vite-browser-external-2447137e.js

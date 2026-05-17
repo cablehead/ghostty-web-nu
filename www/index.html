@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ghostty-web-nu</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #1e1e1e; color: #d4d4d4; font-family: monospace; }
+    #status { position: fixed; top: 6px; right: 8px; font-size: 12px; opacity: 0.7; }
+    #terminal { position: absolute; inset: 0; }
+  </style>
+</head>
+<body>
+  <div id="status">connecting...</div>
+  <div id="terminal"></div>
+
+  <script type="module">
+    import { init, Terminal, FitAddon } from './ghostty-web.js';
+
+    const $status = document.getElementById('status');
+    const setStatus = (s) => { $status.textContent = s; };
+
+    function b64ToBytes(b64) {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+
+    async function main() {
+      await init();
+
+      const term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: 'Monaco, Menlo, "Courier New", monospace',
+        theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+        scrollback: 10000,
+      });
+
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(document.getElementById('terminal'));
+      fit.fit();
+      fit.observeResize();
+
+      // 1. create session at current size
+      setStatus('creating pty...');
+      const created = await fetch('/pty/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cols: term.cols, rows: term.rows }),
+      }).then((r) => r.json());
+      const sid = created.sid;
+      setStatus(`sid ${sid.slice(0, 8)}`);
+
+      // 2. wire user input -> POST /pty/input
+      term.onData((data) => {
+        fetch('/pty/input?sid=' + encodeURIComponent(sid), {
+          method: 'POST',
+          headers: { 'content-type': 'application/octet-stream' },
+          body: data,
+        }).catch(() => {});
+      });
+
+      // 3. wire resize -> POST /pty/resize
+      term.onResize(({ cols, rows }) => {
+        fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cols, rows }),
+        }).catch(() => {});
+      });
+
+      // 4. open SSE for output
+      const es = new EventSource('/pty/stream?sid=' + encodeURIComponent(sid));
+      es.onopen = () => setStatus(`sid ${sid.slice(0, 8)} (live)`);
+      es.onerror = () => setStatus(`sid ${sid.slice(0, 8)} (disconnected)`);
+      es.onmessage = (ev) => term.write(b64ToBytes(ev.data));
+    }
+
+    main().catch((e) => {
+      console.error(e);
+      setStatus('error: ' + e.message);
+    });
+  </script>
+</body>
+</html>
