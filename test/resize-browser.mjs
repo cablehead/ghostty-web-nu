@@ -4,7 +4,7 @@
 // Run:
 //   node ~/ghostty-web-nu/test/resize-browser.mjs
 
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -13,8 +13,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
 const HTTP_NU = resolve(REPO_ROOT, "..", "http-nu-pty", "target", "debug", "http-nu");
 const SERVE_NU = resolve(REPO_ROOT, "serve.nu");
+const ENGINE = process.env.ENGINE || "chromium";
 const CHROMIUM = process.env.CHROMIUM_PATH
   || "/root/.cache/ms-playwright/chromium_headless_shell-1217/chrome-headless-shell-linux64/chrome-headless-shell";
+const WEBKIT_PATH = process.env.WEBKIT_PATH || "";
 
 const PORT = 39000 + (process.pid % 1000);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -37,7 +39,10 @@ async function waitReady() {
 await waitReady();
 console.log("server up on", BASE);
 
-const browser = await chromium.launch({ headless: true, executablePath: CHROMIUM });
+const browser = ENGINE === "webkit"
+  ? await webkit.launch({ headless: true, ...(WEBKIT_PATH ? { executablePath: WEBKIT_PATH } : {}) })
+  : await chromium.launch({ headless: true, executablePath: CHROMIUM });
+console.log("engine:", ENGINE);
 const ctx = await browser.newContext({ viewport: { width: 1024, height: 768 } });
 const page = await ctx.newPage();
 
@@ -51,8 +56,12 @@ if (LATENCY_MS > 0) {
   console.log("injecting", LATENCY_MS, "ms latency per /pty/* request");
 }
 
-page.on("console", (m) => console.log(`[page console ${m.type()}]`, m.text()));
-page.on("pageerror", (e) => console.log("[page error]", e.message));
+let pageErrors = 0;
+page.on("console", (m) => {
+  if (m.text().includes("warning(osc)")) return; // noisy + harmless
+  console.log(`[page console ${m.type()}]`, m.text());
+});
+page.on("pageerror", (e) => { pageErrors++; console.log("[page error]", e.message); });
 
 let sid = null;
 page.on("response", async (res) => {
@@ -141,8 +150,8 @@ for (let pass = 1; pass <= N; pass++) {
   }
   await new Promise((r) => setTimeout(r, 1000));
   const res = await nudge(`pass-${pass}`);
-  console.log(`pass ${pass}:`, res);
-  if (!res.ok) {
+  console.log(`pass ${pass}:`, res, `pageErrors=${pageErrors}`);
+  if (!res.ok || pageErrors > 0) {
     console.error("HUNG after pass", pass);
     const shot = `/tmp/hang-${pass}.png`;
     await page.screenshot({ path: shot, fullPage: true });

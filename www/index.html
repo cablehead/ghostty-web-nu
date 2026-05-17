@@ -65,37 +65,51 @@
         }).catch(() => {});
       });
 
-      // 3. wire resize -> POST /pty/resize, throttled.
-      // Each resize triggers a blocking cursor::position() roundtrip in
-      // reedline (\x1b[6n -> \x1b[r;cR). If we fire too fast during a drag,
-      // queries pile up and reedline's parser gets confused.
-      let pendingResize = null;
-      let lastResizeAt = 0;
-      const RESIZE_MIN_GAP_MS = 250;
-      const sendResize = ({ cols, rows }) => {
-        fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ cols, rows }),
-        }).catch(() => {});
+      // 3. wire resize -> POST /pty/resize.
+      // Each resize triggers a blocking cursor::position() roundtrip inside
+      // reedline (\x1b[6n -> \x1b[r;cR). During a drag the FitAddon fires
+      // observer events constantly -- coalesce them: ignore no-op size
+      // changes, and serialize fetches so at most one is in flight.
+      let lastCols = term.cols;
+      let lastRows = term.rows;
+      let inflight = null;
+      let pending = null;
+      const sendResize = async ({ cols, rows }) => {
+        try {
+          await fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ cols, rows }),
+          });
+          // Force reedline to redraw from a clean origin: Ctrl+L (form feed)
+          // makes reedline clear the screen and reset prompt_start_row to 0
+          // via initialize_prompt_position. Without this, reedline's
+          // cursor::position() call inside handle_resize captures a stale
+          // row (because our SSE+POST round-trip is slow), causing drift
+          // that accumulates and eventually paints off-screen.
+          await new Promise((r) => setTimeout(r, 80));
+          await fetch('/pty/input?sid=' + encodeURIComponent(sid), {
+            method: 'POST',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: '\x0c',
+          });
+        } catch {}
+      };
+      const drain = async () => {
+        while (pending) {
+          const next = pending;
+          pending = null;
+          inflight = sendResize(next);
+          await inflight;
+        }
+        inflight = null;
       };
       term.onResize(({ cols, rows }) => {
-        const now = Date.now();
-        const dt = now - lastResizeAt;
-        if (dt >= RESIZE_MIN_GAP_MS) {
-          lastResizeAt = now;
-          pendingResize = null;
-          sendResize({ cols, rows });
-        } else {
-          pendingResize = { cols, rows };
-          setTimeout(() => {
-            if (pendingResize) {
-              lastResizeAt = Date.now();
-              sendResize(pendingResize);
-              pendingResize = null;
-            }
-          }, RESIZE_MIN_GAP_MS - dt);
-        }
+        if (cols === lastCols && rows === lastRows) return;
+        lastCols = cols;
+        lastRows = rows;
+        pending = { cols, rows };
+        if (!inflight) drain();
       });
 
       // 4. open SSE for output
