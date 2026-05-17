@@ -15,7 +15,11 @@ const STATIC = (path self | path dirname | path join "www")
   match [$req.method, $req.path] {
     [POST, "/pty/create"] => {
       let cfg = $body | from json
-      let sid = pty open $cmd --cols ($cfg.cols? | default 80) --rows ($cfg.rows? | default 24)
+      let sid = if $cmd == "nu" {
+        pty open --embedded --cols ($cfg.cols? | default 80) --rows ($cfg.rows? | default 24)
+      } else {
+        pty open $cmd --cols ($cfg.cols? | default 80) --rows ($cfg.rows? | default 24)
+      }
       {sid: $sid}
     }
 

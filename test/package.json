@@ -1,0 +1,6 @@
+{
+  "name": "ghostty-web-nu-test",
+  "private": true,
+  "type": "module",
+  "dependencies": { "playwright-core": "^1.59.1" }
+}

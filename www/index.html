@@ -40,6 +40,9 @@
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(document.getElementById('terminal'));
+      // Defer fit() past first paint so clientWidth/Height are non-zero,
+      // otherwise the FitAddon measures an empty box and we get a tiny font.
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       fit.fit();
       fit.observeResize();
 
@@ -62,13 +65,37 @@
         }).catch(() => {});
       });
 
-      // 3. wire resize -> POST /pty/resize
-      term.onResize(({ cols, rows }) => {
+      // 3. wire resize -> POST /pty/resize, throttled.
+      // Each resize triggers a blocking cursor::position() roundtrip in
+      // reedline (\x1b[6n -> \x1b[r;cR). If we fire too fast during a drag,
+      // queries pile up and reedline's parser gets confused.
+      let pendingResize = null;
+      let lastResizeAt = 0;
+      const RESIZE_MIN_GAP_MS = 250;
+      const sendResize = ({ cols, rows }) => {
         fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ cols, rows }),
         }).catch(() => {});
+      };
+      term.onResize(({ cols, rows }) => {
+        const now = Date.now();
+        const dt = now - lastResizeAt;
+        if (dt >= RESIZE_MIN_GAP_MS) {
+          lastResizeAt = now;
+          pendingResize = null;
+          sendResize({ cols, rows });
+        } else {
+          pendingResize = { cols, rows };
+          setTimeout(() => {
+            if (pendingResize) {
+              lastResizeAt = Date.now();
+              sendResize(pendingResize);
+              pendingResize = null;
+            }
+          }, RESIZE_MIN_GAP_MS - dt);
+        }
       });
 
       // 4. open SSE for output
