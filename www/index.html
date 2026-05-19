@@ -44,7 +44,15 @@
       // otherwise the FitAddon measures an empty box and we get a tiny font.
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       fit.fit();
-      fit.observeResize();
+
+      // fit.observeResize() would fire per-frame during a window drag, and
+      // each fit() synchronously reallocates the WASM buffer + canvas. The
+      // storm freezes the browser tab. Hard debounce instead.
+      let resizeTimer = null;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => fit.fit(), 200);
+      });
 
       // 1. create session at current size
       setStatus('creating pty...');
@@ -80,18 +88,6 @@
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ cols, rows }),
-          });
-          // Force reedline to redraw from a clean origin: Ctrl+L (form feed)
-          // makes reedline clear the screen and reset prompt_start_row to 0
-          // via initialize_prompt_position. Without this, reedline's
-          // cursor::position() call inside handle_resize captures a stale
-          // row (because our SSE+POST round-trip is slow), causing drift
-          // that accumulates and eventually paints off-screen.
-          await new Promise((r) => setTimeout(r, 80));
-          await fetch('/pty/input?sid=' + encodeURIComponent(sid), {
-            method: 'POST',
-            headers: { 'content-type': 'application/octet-stream' },
-            body: '\x0c',
           });
         } catch {}
       };

@@ -114,25 +114,66 @@ async function counters() {
   }));
 }
 
+async function canvasHash() {
+  return page.evaluate(() => {
+    const c = document.querySelector("canvas");
+    if (!c) return null;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    const w = Math.min(c.width, 800);
+    const h = Math.min(c.height, 400);
+    const img = ctx.getImageData(0, 0, w, h);
+    let h1 = 5381;
+    for (let i = 0; i < img.data.length; i += 32) h1 = ((h1 << 5) + h1 + img.data[i]) >>> 0;
+    return h1;
+  });
+}
+
 async function nudge(label, timeoutMs = 4000) {
   const start = await counters();
-  // Drive the real input path: focus the terminal and type via the browser
-  // (term.onData -> our throttled fetch -> /pty/input).
-  await page.focus("#terminal");
+  const startHash = await canvasHash();
+  // Click the canvas to ensure it has focus, then type.
+  await page.click("canvas");
   await page.keyboard.type(`echo nudge-${label}`);
   await page.keyboard.press("Enter");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const c = await counters();
-    if (c.sseBytes > start.sseBytes + 50) {
-      return { ok: true, sseGrowth: c.sseBytes - start.sseBytes, msgGrowth: c.sseMessages - start.sseMessages };
+    const h = await canvasHash();
+    const sseOk = c.sseBytes > start.sseBytes + 50;
+    const visualOk = h !== startHash;
+    if (sseOk && visualOk) {
+      return { ok: true, sseGrowth: c.sseBytes - start.sseBytes, msgGrowth: c.sseMessages - start.sseMessages, visualChanged: true };
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  return { ok: false, end: await counters(), start };
+  const c = await counters();
+  const h = await canvasHash();
+  return {
+    ok: false,
+    sseGrowth: c.sseBytes - start.sseBytes,
+    msgGrowth: c.sseMessages - start.sseMessages,
+    visualChanged: h !== startHash,
+  };
 }
 
 console.log("baseline:", await nudge("baseline"));
+
+// Fill scrollback so the prompt isn't trivially at row 1. Real usage has
+// the prompt far down the screen by the time you resize.
+async function fillScrollback(n = 30) {
+  await page.click("canvas");
+  for (let i = 0; i < n; i++) {
+    await page.keyboard.type(`ls -la /usr/bin | head -3`);
+    await page.keyboard.press("Enter");
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  await new Promise((r) => setTimeout(r, 500));
+}
+const SCROLLBACK_LINES = Number(process.env.SCROLLBACK || 30);
+if (SCROLLBACK_LINES > 0) {
+  console.log(`filling scrollback (${SCROLLBACK_LINES} commands)...`);
+  await fillScrollback(SCROLLBACK_LINES);
+}
 
 const SIZES = [
   [800, 600], [900, 700], [1100, 800], [1000, 750], [950, 720],
@@ -141,6 +182,22 @@ const SIZES = [
 const N = Number(process.env.PASSES || 6);
 const GAP_MS = Number(process.env.GAP_MS || 10);
 const SIZES_PER_PASS = Number(process.env.SIZES_PER_PASS || 40);
+
+// Track whether the page's JS thread is responsive: if a simple
+// page.evaluate doesn't return in 2s, the main thread is wedged.
+async function isResponsive(timeoutMs = 2000) {
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; }, timeoutMs);
+  try {
+    await page.evaluate(() => Date.now());
+    clearTimeout(timer);
+    return !timedOut;
+  } catch {
+    clearTimeout(timer);
+    return false;
+  }
+}
+
 for (let pass = 1; pass <= N; pass++) {
   console.log(`--- pass ${pass}: ${SIZES_PER_PASS} resizes (gap=${GAP_MS}ms) ---`);
   for (let i = 0; i < SIZES_PER_PASS; i++) {
@@ -148,10 +205,11 @@ for (let pass = 1; pass <= N; pass++) {
     await page.setViewportSize({ width: w + (i % 7), height: h + (i % 5) });
     if (GAP_MS > 0) await new Promise((r) => setTimeout(r, GAP_MS));
   }
+  const responsive = await isResponsive(3000);
   await new Promise((r) => setTimeout(r, 1000));
   const res = await nudge(`pass-${pass}`);
-  console.log(`pass ${pass}:`, res, `pageErrors=${pageErrors}`);
-  if (!res.ok || pageErrors > 0) {
+  console.log(`pass ${pass}:`, res, `pageErrors=${pageErrors} responsive=${responsive}`);
+  if (!res.ok || pageErrors > 0 || !responsive) {
     console.error("HUNG after pass", pass);
     const shot = `/tmp/hang-${pass}.png`;
     await page.screenshot({ path: shot, fullPage: true });
