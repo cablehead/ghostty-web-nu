@@ -115,6 +115,19 @@
       term.clear();
       currentSid = sid;
       if (!sid) return;
+      // Force the pty's size to match the browser's term on attach. The
+      // initial fit.fit() runs before term.onResize is registered, so the
+      // resize-delta guard later never fires for the open-time dimensions.
+      // Without this push, the pty stays at its 80x24 default while the
+      // browser has grown to fit the viewport, and nu emits output sized
+      // for a screen the user can't actually see (cursor reports diverge,
+      // CUP positioning lands wrong, etc).
+      lastCols = term.cols; lastRows = term.rows;
+      fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cols: term.cols, rows: term.rows }),
+      }).catch(() => {});
       const es = new EventSource('/pty/stream?sid=' + encodeURIComponent(sid));
       es.onmessage = (ev) => term.write(b64ToBytes(ev.data));
       currentEs = es;
