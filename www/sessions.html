@@ -13,7 +13,9 @@
     html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
     body { display: grid; grid-template-columns: 14rem 1fr; height: 100dvh; }
     aside { background: var(--pane); border-right: 1px solid var(--pane-border); overflow-y: auto; min-height: 0; }
-    aside header { padding: .5rem .75rem; border-bottom: 1px solid var(--pane-border); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+    aside header { padding: .4rem .5rem .4rem .75rem; border-bottom: 1px solid var(--pane-border); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; justify-content: space-between; }
+    aside header .new-btn { background: transparent; color: inherit; border: 1px solid var(--pane-border); border-radius: 3px; padding: 0 .5rem; font: inherit; cursor: pointer; line-height: 1.4; }
+    aside header .new-btn:hover { background: #222; color: var(--fg); }
     aside ul { list-style: none; margin: 0; padding: 0; }
     aside li button { display: block; width: 100%; text-align: left; background: transparent; color: inherit; border: 0; border-bottom: 1px solid var(--pane-border); padding: .4rem .75rem; font: inherit; cursor: pointer; }
     aside li button:hover { background: #222; }
@@ -26,6 +28,18 @@
 <body
   data-signals="{selectedSid: '', connId: '', sid: '', sel: ''}"
   data-on-load="@get('/sse')"
+  data-actions='{
+    "new":   "window.app.newSession()",
+    "close": "window.app.closeSelected()",
+    "next":  "window.app.cycle(1)",
+    "prev":  "window.app.cycle(-1)"
+  }'
+  data-keymap='{
+    "alt+n": "new",
+    "alt+d": "close",
+    "alt+j": "next",
+    "alt+k": "prev"
+  }'
 >
   <!-- Server overwrites this on every event. The initial placeholder
        just sits empty until the first patch lands. -->
@@ -114,11 +128,66 @@
       attachTo(sid);
     });
     mo.observe(container, { attributes: true, attributeFilter: ['data-sid'] });
-    // Also handle the initial value once datastar finishes its first paint.
     queueMicrotask(() => {
       const sid = container.getAttribute('data-sid') || '';
       if (sid) attachTo(sid);
     });
+
+    // Action registry. Actions are JS strings keyed by id; data-actions
+    // on <body> maps id -> JS, data-keymap maps combo -> id. The handler
+    // below evaluates the JS string for the matched action.
+    window.app = {
+      newSession() {
+        document.querySelector('#sessions-list .new-btn')?.click();
+      },
+      closeSelected() {
+        if (!currentSid) return;
+        fetch('/pty/close?sid=' + encodeURIComponent(currentSid), { method: 'POST' }).catch(() => {});
+      },
+      cycle(dir) {
+        const items = [...document.querySelectorAll('#sessions-list li')];
+        if (!items.length) return;
+        const idx = items.findIndex((li) => li.classList.contains('selected'));
+        const next = items[((idx < 0 ? 0 : idx) + dir + items.length) % items.length];
+        next.querySelector('button')?.click();
+      },
+    };
+
+    // Combo normalization. macOS substitutes a unicode glyph for e.key when
+    // Alt is held (option+d -> ∂); fall back to e.code (KeyD) -> "d" so
+    // alt+letter combos still match.
+    function comboKey(e) {
+      const parts = [];
+      if (e.metaKey) parts.push('cmd');
+      if (e.ctrlKey) parts.push('ctrl');
+      if (e.altKey) parts.push('alt');
+      if (e.shiftKey) parts.push('shift');
+      let k = e.key;
+      if (e.altKey && e.code && e.code.startsWith('Key')) {
+        k = e.code.slice(3).toLowerCase();
+      } else if (k.length === 1 && /[a-zA-Z]/.test(k)) {
+        k = k.toLowerCase();
+      } else if (k === ' ') {
+        k = 'space';
+      }
+      parts.push(k.toLowerCase());
+      return parts.join('+');
+    }
+    function readJson(name) {
+      const raw = document.body.dataset[name];
+      if (!raw) return {};
+      try { return JSON.parse(raw); } catch { return {}; }
+    }
+    // Capture-phase so we beat ghostty-web's canvas handler to the chord.
+    document.addEventListener('keydown', (e) => {
+      const id = readJson('keymap')[comboKey(e)];
+      if (!id) return;
+      const js = readJson('actions')[id];
+      if (!js) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try { new Function(js)(); } catch (err) { console.error('action', id, err); }
+    }, { capture: true });
   </script>
 </body>
 </html>

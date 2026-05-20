@@ -28,7 +28,7 @@ def render-list [ptys: list, selected: string]: nothing -> string {
     let onclick = $"$sid = '($p.sid)'; @post\('/nav'\)"
     $"<li class='($cls)'><button type='button' data-on-click=\"($onclick)\">($label)<small>($p.sid | str substring 0..8)</small></button></li>"
   } | str join ""
-  $"<aside id='sessions-list'><header>Sessions</header><ul>($items)</ul></aside>"
+  $"<aside id='sessions-list'><header>Sessions <button type='button' class='new-btn' data-on-click=\"@post\('/pty/new'\)\" title='New session'>+</button></header><ul>($items)</ul></aside>"
 }
 
 {|req|
@@ -62,8 +62,19 @@ def render-list [ptys: list, selected: string]: nothing -> string {
             | each {|e| {kind: "nav", val: $e.value}} })
       | prepend {kind: "init", val: {}}
       | generate {|ev, state|
-          let new_sel = if $ev.kind == "nav" { $ev.val.sid } else { $state.sel }
-          let list_patch = (render-list (pty list) $new_sel
+          let live = (pty list)
+          let live_sids = $live | get sid
+          # 1. Nav explicitly requested -- honor it.
+          # 2. Otherwise, if our currently-selected sid disappeared (close /
+          #    death), fall back to the first remaining sid (or "" for none).
+          let new_sel = if $ev.kind == "nav" {
+            $ev.val.sid
+          } else if ($state.sel in $live_sids) {
+            $state.sel
+          } else {
+            $live | get sid? | get 0? | default ""
+          }
+          let list_patch = (render-list $live $new_sel
             | to datastar-patch-elements --selector "#sessions-list")
           let need_signal = ($ev.kind == "init") or ($new_sel != $state.sel)
           let signal_patch = if $need_signal {
@@ -83,6 +94,22 @@ def render-list [ptys: list, selected: string]: nothing -> string {
         connId: ($signals.connId? | default "")
         sid: ($signals.sid? | default "")
       } | .bus pub "nav.events"
+      null | metadata set { merge {'http.response': {status: 204}} }
+    }
+
+    [POST, "/pty/new"] => {
+      # Spawn an embedded nu pty and publish a nav.events for the requesting
+      # connection so the new session becomes the selected one. The
+      # `pty open` itself publishes `pty.events {event: created}` so every
+      # connected /sse sees the new row appear in the list.
+      let signals = $body | from datastar-signals $req
+      let cmd = $env.GHOSTTY_WEB_NU_CMD? | default "nu"
+      let sid = if $cmd == "nu" {
+        pty open --embedded
+      } else {
+        pty open $cmd
+      }
+      {connId: ($signals.connId? | default ""), sid: $sid} | .bus pub "nav.events"
       null | metadata set { merge {'http.response': {status: 204}} }
     }
 
