@@ -129,8 +129,25 @@
         body: JSON.stringify({ cols: term.cols, rows: term.rows }),
       }).catch(() => {});
       const es = new EventSource('/pty/stream?sid=' + encodeURIComponent(sid));
-      es.onmessage = (ev) => term.write(b64ToBytes(ev.data));
+      es.onmessage = (ev) => writePreservingScroll(b64ToBytes(ev.data));
       currentEs = es;
+    }
+
+    // ghostty-web's Terminal.write() force-scrolls to bottom on every call,
+    // which yanks the user back the moment any output arrives if they're
+    // trying to read scrollback. Preserve their position when they're
+    // scrolled up; new lines append silently below the viewport. When
+    // they're already at the bottom (viewportY === 0), leave the default
+    // auto-scroll alone.
+    function writePreservingScroll(bytes) {
+      const wasScrolledUp = term.viewportY !== 0;
+      const savedY = term.viewportY;
+      const prevBacklog = term.getScrollbackLength?.() ?? 0;
+      term.write(bytes);
+      if (wasScrolledUp) {
+        const delta = (term.getScrollbackLength?.() ?? 0) - prevBacklog;
+        term.scrollToLine(savedY + delta);
+      }
     }
 
     // datastar mirrors the $selectedSid signal onto the #terminal element's
