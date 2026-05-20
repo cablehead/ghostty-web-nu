@@ -43,9 +43,11 @@ def render-list [ptys: list, selected: string]: nothing -> string {
       let conn_id = $req.query.connId? | default (random uuid)
 
       # Bootstrap: pick first pty as selected; if none, spawn one.
+      # Honor GHOSTTY_WEB_NU_CMD so the bootstrap path matches /pty/new.
       let bootstrap = (pty list)
+      let cmd = $env.GHOSTTY_WEB_NU_CMD? | default "nu"
       let initial_sid = if ($bootstrap | is-empty) {
-        pty open --embedded
+        if $cmd == "nu" { pty open --embedded } else { pty open $cmd }
       } else {
         $bootstrap | first | get sid
       }
