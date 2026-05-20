@@ -42,16 +42,33 @@
     aside header button:hover { background: #222; }
     aside nav { overflow-y: auto; flex: 1; }
     aside ul { list-style: none; margin: 0; padding: 0; }
-    aside li button {
-      display: block; width: 100%; text-align: left;
+    aside li {
+      display: flex; align-items: stretch;
+      border-bottom: 1px solid var(--pane-border);
+    }
+    aside li > button {
+      flex: 1; min-width: 0;
+      text-align: left;
       background: transparent; color: inherit;
       border: 0; padding: .4rem .75rem;
       font: inherit; cursor: pointer;
-      border-bottom: 1px solid var(--pane-border);
+      overflow: hidden;
     }
-    aside li button:hover { background: #222; }
-    aside li.selected button { background: var(--sel); color: var(--sel-fg); }
+    aside li > button:hover { background: #222; }
+    aside li.selected > button { background: var(--sel); color: var(--sel-fg); }
     aside li small { display: block; font-size: 11px; opacity: .6; }
+    aside li .close {
+      flex: 0 0 auto;
+      width: 1.75rem;
+      align-self: stretch;
+      background: transparent; color: inherit;
+      border: 0; padding: 0; cursor: pointer;
+      font: inherit; opacity: 0;
+      transition: opacity .1s;
+    }
+    aside li:hover .close,
+    aside li.selected .close { opacity: .6; }
+    aside li .close:hover { opacity: 1; color: #ff7676; background: #222; }
     main {
       position: relative;
       min-height: 0;
@@ -124,7 +141,16 @@
         meta.textContent = `${s.lastCols}x${s.lastRows} • ${sid.slice(0, 8)}`;
         btn.append(label, meta);
         btn.addEventListener('mousedown', () => select(sid));
-        li.appendChild(btn);
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'close';
+        close.title = 'Close session';
+        close.textContent = '×'; // multiplication sign
+        close.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          deleteSession(sid);
+        });
+        li.append(btn, close);
         $list.appendChild(li);
         idx++;
       }
@@ -239,24 +265,26 @@
       select(sid);
     }
 
-    async function deleteSelected() {
-      if (!selected) return;
-      const sid = selected;
+    async function deleteSession(sid) {
       const s = sessions.get(sid);
+      if (!s) return;
+      const wasSelected = sid === selected;
       try { s.es && s.es.close(); } catch {}
       try { s.container.remove(); } catch {}
       sessions.delete(sid);
-      // pick a neighbor before re-render
-      const keys = [...sessions.keys()];
-      selected = keys[0] || null;
-      if (selected) {
-        for (const [other, st] of sessions) {
-          st.container.classList.toggle('is-active', other === selected);
+      if (wasSelected) {
+        const keys = [...sessions.keys()];
+        selected = keys[0] || null;
+        if (selected) {
+          for (const [other, st] of sessions) {
+            st.container.classList.toggle('is-active', other === selected);
+          }
         }
       }
       renderList();
       fetch(`/pty/delete?sid=${encodeURIComponent(sid)}`, { method: 'POST' }).catch(() => {});
     }
+    const deleteSelected = () => selected && deleteSession(selected);
 
     function cycle(dir) {
       const keys = [...sessions.keys()];
