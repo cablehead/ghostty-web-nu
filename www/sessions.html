@@ -3,121 +3,90 @@
 <head>
   <meta charset="utf-8">
   <title>ghostty-web-nu sessions</title>
+  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.0-RC.5/bundles/datastar.js"></script>
   <style>
     :root {
-      --bg: #1e1e1e;
-      --fg: #d4d4d4;
-      --pane: #161616;
-      --pane-border: #2a2a2a;
-      --sel: #2d4f7c;
-      --sel-fg: #ffffff;
-      --dim: #888;
+      --bg: #1e1e1e; --fg: #d4d4d4;
+      --pane: #161616; --pane-border: #2a2a2a;
+      --sel: #2d4f7c; --sel-fg: #ffffff; --dim: #888;
     }
     html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
     body { display: grid; grid-template-columns: 14rem 1fr; height: 100dvh; }
-    aside {
-      background: var(--pane);
-      border-right: 1px solid var(--pane-border);
-      display: flex; flex-direction: column;
-      min-height: 0;
-    }
-    aside header {
-      padding: .5rem .75rem;
-      display: flex; align-items: center; justify-content: space-between;
-      border-bottom: 1px solid var(--pane-border);
-      font-size: 12px;
-      letter-spacing: .04em;
-      text-transform: uppercase;
-      color: var(--dim);
-    }
-    aside header button {
-      background: transparent;
-      color: inherit;
-      border: 1px solid var(--pane-border);
-      border-radius: 3px;
-      padding: .15rem .5rem;
-      font: inherit;
-      cursor: pointer;
-    }
-    aside header button:hover { background: #222; }
-    aside nav { overflow-y: auto; flex: 1; }
+    aside { background: var(--pane); border-right: 1px solid var(--pane-border); overflow-y: auto; min-height: 0; }
+    aside header { padding: .5rem .75rem; border-bottom: 1px solid var(--pane-border); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
     aside ul { list-style: none; margin: 0; padding: 0; }
-    aside li {
-      display: flex; align-items: stretch;
-      border-bottom: 1px solid var(--pane-border);
-    }
-    aside li > button {
-      flex: 1; min-width: 0;
-      text-align: left;
-      background: transparent; color: inherit;
-      border: 0; padding: .4rem .75rem;
-      font: inherit; cursor: pointer;
-      overflow: hidden;
-    }
-    aside li > button:hover { background: #222; }
-    aside li.selected > button { background: var(--sel); color: var(--sel-fg); }
+    aside li button { display: block; width: 100%; text-align: left; background: transparent; color: inherit; border: 0; border-bottom: 1px solid var(--pane-border); padding: .4rem .75rem; font: inherit; cursor: pointer; }
+    aside li button:hover { background: #222; }
+    aside li.selected button { background: var(--sel); color: var(--sel-fg); }
     aside li small { display: block; font-size: 11px; opacity: .6; }
-    aside li .close {
-      flex: 0 0 auto;
-      width: 1.75rem;
-      align-self: stretch;
-      background: transparent; color: inherit;
-      border: 0; padding: 0; cursor: pointer;
-      font: inherit; opacity: 0;
-      transition: opacity .1s;
-    }
-    aside li:hover .close,
-    aside li.selected .close { opacity: .6; }
-    aside li .close:hover { opacity: 1; color: #ff7676; background: #222; }
-    main {
-      position: relative;
-      min-height: 0;
-      overflow: hidden;
-    }
-    main .pane {
-      position: absolute; inset: 0;
-      display: none;
-    }
-    main .pane.is-active { display: block; }
-    main .empty {
-      display: grid; place-items: center;
-      width: 100%; height: 100%;
-      color: var(--dim); font-size: 13px;
-    }
-    main .empty kbd {
-      background: #2a2a2a; padding: .15rem .4rem; border-radius: 3px;
-      font: inherit;
-    }
+    main { position: relative; min-height: 0; overflow: hidden; }
+    #terminal { position: absolute; inset: 0; }
   </style>
 </head>
-<body>
-  <aside>
-    <header>
-      <span>Sessions</span>
-      <button id="new-btn" title="New session (N)">+ new</button>
-    </header>
-    <nav>
-      <ul id="session-list"></ul>
-    </nav>
-  </aside>
-  <main id="panes">
-    <div class="empty" id="empty">
-      No sessions. Press <kbd>opt</kbd>+<kbd>N</kbd> or click <kbd>+ new</kbd>.
-    </div>
+<body
+  data-signals="{selectedSid: '', connId: '', sid: '', sel: ''}"
+  data-on-load="@get('/sse')"
+>
+  <!-- Server overwrites this on every event. The initial placeholder
+       just sits empty until the first patch lands. -->
+  <aside id="sessions-list"><header>Sessions</header></aside>
+
+  <main>
+    <!-- datastar mirrors $selectedSid into data-sid; our JS observes the
+         attribute change and swaps the EventSource. The terminal element
+         itself is mounted once and reused. -->
+    <div id="terminal" data-attr-data-sid="$selectedSid"></div>
   </main>
 
   <script type="module">
     import { init, Terminal, FitAddon } from './ghostty-web.js';
     await init();
 
-    const $list = document.getElementById('session-list');
-    const $panes = document.getElementById('panes');
-    const $empty = document.getElementById('empty');
-    const $newBtn = document.getElementById('new-btn');
+    const term = new Terminal({
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+      theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+      scrollback: 10000,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    const container = document.getElementById('terminal');
+    term.open(container);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    fit.fit();
 
-    // sid -> { term, fit, es, container, label, lastCols, lastRows, pendingSize, inflight }
-    const sessions = new Map();
-    let selected = null;
+    // Hard-debounced fit on window resize (avoid per-frame WASM resize storm).
+    let rt = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(rt);
+      rt = setTimeout(() => fit.fit(), 200);
+    });
+
+    // Input -> /pty/input (keyed by currently-attached sid)
+    let currentSid = null;
+    let currentEs = null;
+    term.onData((d) => {
+      if (!currentSid) return;
+      fetch('/pty/input?sid=' + encodeURIComponent(currentSid), {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: d,
+      }).catch(() => {});
+    });
+
+    // Resize -> /pty/resize
+    let lastCols = term.cols, lastRows = term.rows;
+    term.onResize(({ cols, rows }) => {
+      if (!currentSid) return;
+      if (cols === lastCols && rows === lastRows) return;
+      lastCols = cols; lastRows = rows;
+      fetch('/pty/resize?sid=' + encodeURIComponent(currentSid), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cols, rows }),
+      }).catch(() => {});
+    });
 
     function b64ToBytes(b64) {
       const bin = atob(b64);
@@ -126,213 +95,30 @@
       return out;
     }
 
-    function renderList() {
-      $empty.style.display = sessions.size ? 'none' : '';
-      $list.innerHTML = '';
-      let idx = 1;
-      for (const [sid, s] of sessions) {
-        const li = document.createElement('li');
-        if (sid === selected) li.classList.add('selected');
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        const label = document.createElement('span');
-        label.textContent = `${idx}. ${s.label}`;
-        const meta = document.createElement('small');
-        meta.textContent = `${s.lastCols}x${s.lastRows} • ${sid.slice(0, 8)}`;
-        btn.append(label, meta);
-        btn.addEventListener('mousedown', () => select(sid));
-        const close = document.createElement('button');
-        close.type = 'button';
-        close.className = 'close';
-        close.title = 'Close session';
-        close.textContent = '×'; // multiplication sign
-        close.addEventListener('mousedown', (e) => {
-          e.stopPropagation();
-          deleteSession(sid);
-        });
-        li.append(btn, close);
-        $list.appendChild(li);
-        idx++;
-      }
+    function attachTo(sid) {
+      if (sid === currentSid) return;
+      if (currentEs) { try { currentEs.close(); } catch {} currentEs = null; }
+      term.clear();
+      currentSid = sid;
+      if (!sid) return;
+      const es = new EventSource('/pty/stream?sid=' + encodeURIComponent(sid));
+      es.onmessage = (ev) => term.write(b64ToBytes(ev.data));
+      currentEs = es;
     }
 
-    function select(sid) {
-      if (!sessions.has(sid)) return;
-      if (selected === sid) return;
-      selected = sid;
-      for (const [other, s] of sessions) {
-        s.container.classList.toggle('is-active', other === sid);
-      }
-      renderList();
-      // refit on display in case the canvas was hidden when it was last sized
-      const s = sessions.get(sid);
-      requestAnimationFrame(() => {
-        try { s.fit.fit(); } catch {}
-        s.term.focus();
-      });
-    }
-
-    function sendResizeFor(sid, cols, rows) {
-      return fetch(`/pty/resize?sid=${encodeURIComponent(sid)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cols, rows }),
-      }).catch(() => {});
-    }
-
-    async function spawn(cols, rows) {
-      const created = await fetch('/pty/create', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cols, rows }),
-      }).then((r) => r.json());
-      return created;
-    }
-
-    async function newSession() {
-      // Decide initial size from the main pane's available area, in cells.
-      // We construct a throwaway probe by reading the empty container.
-      const probe = document.createElement('div');
-      probe.style.cssText = 'position:absolute;inset:0;visibility:hidden';
-      $panes.appendChild(probe);
-      const probeRect = probe.getBoundingClientRect();
-      $panes.removeChild(probe);
-
-      const term = new Terminal({
-        cursorBlink: true,
-        fontSize: 14,
-        fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-        theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
-        scrollback: 10000,
-      });
-      const fit = new FitAddon();
-      term.loadAddon(fit);
-
-      const container = document.createElement('div');
-      container.className = 'pane';
-      $panes.appendChild(container);
-      term.open(container);
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      fit.fit();
-      // Don't use fit.observeResize() -- its ResizeObserver fires per-frame
-      // during a window drag, and each fit() synchronously reallocates the
-      // WASM buffer + canvas. That storm freezes the browser tab. Instead,
-      // listen on window resize with a hard debounce and fit() at the end.
-
-      const created = await spawn(term.cols, term.rows);
-      const sid = created.sid;
-      const label = created.cmd || 'nu';
-
-      const state = {
-        term, fit, container, label,
-        lastCols: term.cols, lastRows: term.rows,
-        es: null, inflight: null, pending: null,
-      };
-
-      // Input -> /pty/input
-      term.onData((data) => {
-        fetch(`/pty/input?sid=${encodeURIComponent(sid)}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/octet-stream' },
-          body: data,
-        }).catch(() => {});
-      });
-
-      // Resize -> serialized fetches + ctrl-l band-aid
-      const drain = async () => {
-        while (state.pending) {
-          const { cols, rows } = state.pending;
-          state.pending = null;
-          state.inflight = sendResizeFor(sid, cols, rows);
-          await state.inflight;
-        }
-        state.inflight = null;
-      };
-      term.onResize(({ cols, rows }) => {
-        if (cols === state.lastCols && rows === state.lastRows) return;
-        state.lastCols = cols;
-        state.lastRows = rows;
-        state.pending = { cols, rows };
-        if (!state.inflight) drain();
-      });
-
-      // SSE -> term.write(decoded)
-      const es = new EventSource(`/pty/stream?sid=${encodeURIComponent(sid)}`);
-      es.onmessage = (ev) => state.term.write(b64ToBytes(ev.data));
-      state.es = es;
-
-      sessions.set(sid, state);
-      select(sid);
-    }
-
-    async function deleteSession(sid) {
-      const s = sessions.get(sid);
-      if (!s) return;
-      const wasSelected = sid === selected;
-      try { s.es && s.es.close(); } catch {}
-      try { s.container.remove(); } catch {}
-      sessions.delete(sid);
-      if (wasSelected) {
-        const keys = [...sessions.keys()];
-        selected = keys[0] || null;
-        if (selected) {
-          for (const [other, st] of sessions) {
-            st.container.classList.toggle('is-active', other === selected);
-          }
-        }
-      }
-      renderList();
-      fetch(`/pty/delete?sid=${encodeURIComponent(sid)}`, { method: 'POST' }).catch(() => {});
-    }
-    const deleteSelected = () => selected && deleteSession(selected);
-
-    function cycle(dir) {
-      const keys = [...sessions.keys()];
-      if (!keys.length) return;
-      const i = selected ? keys.indexOf(selected) : -1;
-      const next = (i + dir + keys.length) % keys.length;
-      select(keys[next]);
-    }
-
-    // Option/Alt leader. Capture phase so we intercept BEFORE ghostty-web's
-    // canvas handler -- the terminal otherwise eats alt+letter as meta-key
-    // bindings (reedline's word-jump etc.). e.code is the physical key, so
-    // it's stable even when macOS option+letter substitutes a unicode glyph
-    // for e.key.
-    document.addEventListener('keydown', (e) => {
-      if (!e.altKey) return;
-      // Cmd/Ctrl combos pass through; this is a pure Option-leader binding.
-      if (e.metaKey || e.ctrlKey) return;
-      const handlers = {
-        KeyN: () => newSession(),
-        KeyD: () => deleteSelected(),
-        KeyJ: () => cycle(1),
-        KeyK: () => cycle(-1),
-      };
-      const fn = handlers[e.code];
-      if (fn) {
-        e.preventDefault();
-        e.stopPropagation();
-        fn();
-      }
-    }, { capture: true });
-
-    $newBtn.addEventListener('click', () => newSession());
-
-    // Single shared window-resize listener: hard-debounced fit() across all
-    // active sessions. One fit per drag-end, not one per frame.
-    let resizeTimer = null;
-    window.addEventListener('resize', () => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        for (const s of sessions.values()) {
-          try { s.fit.fit(); } catch {}
-        }
-      }, 200);
+    // datastar mirrors the $selectedSid signal onto the #terminal element's
+    // data-sid attribute (via data-attr-data-sid). MutationObserver picks up
+    // the change and triggers an EventSource swap.
+    const mo = new MutationObserver(() => {
+      const sid = container.getAttribute('data-sid') || '';
+      attachTo(sid);
     });
-
-    // Start with one session.
-    newSession();
+    mo.observe(container, { attributes: true, attributeFilter: ['data-sid'] });
+    // Also handle the initial value once datastar finishes its first paint.
+    queueMicrotask(() => {
+      const sid = container.getAttribute('data-sid') || '';
+      if (sid) attachTo(sid);
+    });
   </script>
 </body>
 </html>
