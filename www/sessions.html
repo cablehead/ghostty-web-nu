@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <title>ghostty-web-nu sessions</title>
-  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.0-RC.5/bundles/datastar.js"></script>
+  <script type="module" src="{{ datastar_js_path }}"></script>
   <style>
     :root {
       --bg: #1e1e1e; --fg: #d4d4d4;
       --pane: #161616; --pane-border: #2a2a2a;
       --sel: #2d4f7c; --sel-fg: #ffffff; --dim: #888;
+      --chrome: #252525;
     }
     html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
     body { display: grid; grid-template-columns: 14rem 1fr; height: 100dvh; }
@@ -21,13 +22,28 @@
     aside li button:hover { background: #222; }
     aside li.selected button { background: var(--sel); color: var(--sel-fg); }
     aside li small { display: block; font-size: 11px; opacity: .6; }
-    main { position: relative; min-height: 0; overflow: hidden; }
+    /* main is a grid: topbar | (terminal + rightbar) | statusbar. The
+       three chrome bars frame the terminal on top/right/bottom; the left
+       edge is the sidebar border. */
+    main { display: grid; grid-template-rows: 1ch 1fr auto; min-height: 0; overflow: hidden; }
+    .topbar { background: var(--chrome); }
+    .middle { display: grid; grid-template-columns: 1fr 1ch; min-height: 0; }
+    .term-wrap { position: relative; min-height: 0; overflow: hidden; }
     #terminal { position: absolute; inset: 0; }
+    .rightbar { background: var(--chrome); }
+    .statusbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: .5rem 2.5rem .5rem .75rem;
+      background: var(--chrome); color: var(--fg);
+      border-top: 1px solid var(--pane-border);
+      font-size: 11px; line-height: 1;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
   </style>
 </head>
 <body
-  data-signals="{selectedSid: '', connId: '', sid: '', sel: ''}"
-  data-on-load="@get('/sse')"
+  data-signals="{selectedSid: '', connId: '', sid: '', sel: '', focusedDims: ''}"
+  data-init="@get('/sse')"
   data-actions='{
     "new":   "window.app.newSession()",
     "close": "window.app.closeSelected()",
@@ -46,10 +62,23 @@
   <aside id="sessions-list"><header>Sessions</header></aside>
 
   <main>
-    <!-- datastar mirrors $selectedSid into data-sid; our JS observes the
-         attribute change and swaps the EventSource. The terminal element
-         itself is mounted once and reused. -->
-    <div id="terminal" data-attr-data-sid="$selectedSid"></div>
+    <div class="topbar"></div>
+    <div class="middle">
+      <div class="term-wrap">
+        <!-- datastar mirrors $selectedSid into data-sid; our JS observes the
+             attribute change and swaps the EventSource. The terminal element
+             itself is mounted once and reused. -->
+        <div id="terminal" data-attr:data-sid="$selectedSid"></div>
+      </div>
+      <div class="rightbar"></div>
+    </div>
+    <!-- Status bar. Right-side text mirrors $focusedDims which the server
+         patches whenever the focused session changes size or selection
+         moves. -->
+    <footer class="statusbar" aria-label="Status">
+      <span></span>
+      <span data-text="$focusedDims"></span>
+    </footer>
   </main>
 
   <script type="module">
@@ -151,7 +180,7 @@
     }
 
     // datastar mirrors the $selectedSid signal onto the #terminal element's
-    // data-sid attribute (via data-attr-data-sid). MutationObserver picks up
+    // data-sid attribute (via data-attr:data-sid). MutationObserver picks up
     // the change and triggers an EventSource swap.
     const mo = new MutationObserver(() => {
       const sid = container.getAttribute('data-sid') || '';

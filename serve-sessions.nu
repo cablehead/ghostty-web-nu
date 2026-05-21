@@ -1,7 +1,7 @@
 # ghostty-web-nu sessions: server-projected 2-pane UI.
 #
 # Run:
-#   http-nu :5003 ~/ghostty-web-nu/serve-sessions.nu
+#   http-nu --datastar :5003 ~/ghostty-web-nu/serve-sessions.nu
 #
 # Endpoints:
 #   GET  /                  -> static sessions.html shell
@@ -18,17 +18,28 @@ use http-nu/datastar *
 const STATIC = (path self | path dirname | path join "www")
 
 # Render the left-pane session list as plain HTML. Returns a string suitable
-# for `to datastar-patch-elements`.
+# for `to datastar-patch-elements`. Dimensions live in the bottom-right meta
+# corner of the focused pane (driven by the $focusedDims signal), not the
+# sidebar labels.
 def render-list [ptys: list, selected: string]: nothing -> string {
   let items = $ptys | each {|p|
-    let label = $p.meta.label? | default $"nu ($p.cols)x($p.rows)"
+    let label = $p.meta.label? | default "nu"
     let cls = if $p.sid == $selected { "selected" } else { "" }
     # @post('/nav') sends all $signals as JSON. We set $sid (the target)
     # before posting so the server knows which session to select.
     let onclick = $"$sid = '($p.sid)'; @post\('/nav'\)"
-    $"<li class='($cls)'><button type='button' data-on-click=\"($onclick)\">($label)<small>($p.sid | str substring 0..8)</small></button></li>"
+    $"<li class='($cls)'><button type='button' data-on:click=\"($onclick)\">($label)<small>($p.sid | str substring 0..8)</small></button></li>"
   } | str join ""
-  $"<aside id='sessions-list'><header>Sessions <button type='button' class='new-btn' data-on-click=\"@post\('/pty/new'\)\" title='New session'>+</button></header><ul>($items)</ul></aside>"
+  $"<aside id='sessions-list'><header>Sessions <button type='button' class='new-btn' data-on:click=\"@post\('/pty/new'\)\" title='New session'>+</button></header><ul>($items)</ul></aside>"
+}
+
+# Look up the focused session's "cols x rows" string. Returns "" when no
+# session is selected (or the sid has gone away). Used to drive the
+# $focusedDims signal that the bottom-right meta corner mirrors.
+def focused-dims [ptys: list, selected: string]: nothing -> string {
+  if $selected == "" { return "" }
+  let p = $ptys | where sid == $selected | first
+  if $p == null { "" } else { $"($p.cols)x($p.rows)" }
 }
 
 {|req|
@@ -36,7 +47,7 @@ def render-list [ptys: list, selected: string]: nothing -> string {
   match [$req.method, $req.path] {
 
     [GET, "/"] => {
-      .static $STATIC "/sessions.html"
+      {datastar_js_path: $DATASTAR_JS_PATH} | .mj ($STATIC | path join "sessions.html")
     }
 
     [GET, "/sse"] => {
@@ -76,15 +87,22 @@ def render-list [ptys: list, selected: string]: nothing -> string {
           } else {
             $live | get sid? | get 0? | default ""
           }
+          let new_dims = (focused-dims $live $new_sel)
           let list_patch = (render-list $live $new_sel
             | to datastar-patch-elements --selector "#sessions-list")
-          let need_signal = ($ev.kind == "init") or ($new_sel != $state.sel)
-          let signal_patch = if $need_signal {
+          let need_sel = ($ev.kind == "init") or ($new_sel != $state.sel)
+          let sel_patch = if $need_sel {
             ({selectedSid: $new_sel, connId: $conn_id} | to datastar-patch-signals)
           } else { null }
-          let out = if $signal_patch == null { [$list_patch] } else { [$signal_patch, $list_patch] }
-          {out: $out, next: {sel: $new_sel}}
-        } {sel: $initial_sid}
+          # Emit the focused-dims signal only when it actually changes so the
+          # wire stays quiet during selection-only churn.
+          let need_dims = ($ev.kind == "init") or ($new_dims != $state.dims)
+          let dims_patch = if $need_dims {
+            ({focusedDims: $new_dims} | to datastar-patch-signals)
+          } else { null }
+          let out = ([$sel_patch $dims_patch $list_patch] | where {|x| $x != null})
+          {out: $out, next: {sel: $new_sel, dims: $new_dims}}
+        } {sel: $initial_sid, dims: ""}
       | flatten
       | to sse
       | metadata set --content-type "text/event-stream"

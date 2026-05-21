@@ -39,7 +39,7 @@ Single-pane:
 Multi-session 2-pane:
 
 ```sh
-/path/to/http-nu :5003 ./serve-sessions.nu --watch
+/path/to/http-nu --datastar :5003 ./serve-sessions.nu --watch
 ```
 
 Open `http://localhost:500{2,3}`. Each browser tab gets its own embedded `nu`
