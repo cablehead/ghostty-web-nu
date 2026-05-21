@@ -51,14 +51,24 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
     }
 
     [GET, "/sse"] => {
-      let conn_id = $req.query.connId? | default (random uuid)
+      # Datastar packs all signals into ?datastar={...} on GETs. Reconnects
+      # (visibility-driven on v1.0+) replay current signal state, so we can
+      # trust $signals.selectedSid to reflect the user's last selection.
+      let signals = ("" | from datastar-signals $req)
+      let prior_conn = ($signals.connId? | default "")
+      let conn_id = if $prior_conn == "" { random uuid } else { $prior_conn }
+      let requested_sid = ($signals.selectedSid? | default "")
 
-      # Bootstrap: pick first pty as selected; if none, spawn one.
-      # Honor GHOSTTY_WEB_NU_CMD so the bootstrap path matches /pty/new.
+      # Bootstrap: honor the client's selection if the sid still exists;
+      # otherwise pick the first live pty, spawning one if none exist.
+      # GHOSTTY_WEB_NU_CMD matches the path /pty/new takes.
       let bootstrap = (pty list)
+      let live_sids = ($bootstrap | get sid)
       let cmd = $env.GHOSTTY_WEB_NU_CMD? | default "nu"
       let initial_sid = if ($bootstrap | is-empty) {
         if $cmd == "nu" { pty open --embedded } else { pty open $cmd }
+      } else if ($requested_sid in $live_sids) {
+        $requested_sid
       } else {
         $bootstrap | first | get sid
       }
