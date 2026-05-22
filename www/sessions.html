@@ -189,6 +189,45 @@
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     fit.fit();
 
+    // ghostty-web auto-copies to the system clipboard on every mouseup /
+    // dblclick that produces a selection (line ~1949/1957). We want Cmd+C
+    // to be the explicit copy gesture, so neutralize that and add Cmd+C
+    // handling to the keydown wrapper below.
+    if (term.selectionManager) {
+      term.selectionManager.copyToClipboard = () => {};
+    }
+
+    // Wrap ghostty-web's bound keydown listener for two Safari-friendly
+    // behaviors. We mutate the listener (rather than e.g. capture +
+    // stopPropagation at the document level) because Safari seems to treat
+    // any DOM propagation interference as "page claimed it" and skips its
+    // Window-menu fallback for Cmd+`. Replacing the listener leaves the
+    // event flow completely untouched -- same shape as the hardcoded Cmd+V/C
+    // early-return at ghostty-web.js line ~857.
+    //
+    //   Cmd+`  -- let Safari's Window menu cycle through app windows.
+    //   Cmd+C  -- copy the current canvas selection (since we disabled
+    //             ghostty-web's auto-copy on mouseup, Cmd+C is now the only
+    //             way text reaches the clipboard).
+    {
+      const ih = term.inputHandler;
+      const orig = ih.keydownListener;
+      container.removeEventListener('keydown', orig);
+      const wrapped = (e) => {
+        if (e.metaKey && e.code === 'Backquote') return;
+        if (e.metaKey && e.code === 'KeyC') {
+          if (term.hasSelection()) {
+            navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+          }
+          e.preventDefault();
+          return;
+        }
+        return ih.handleKeyDown(e);
+      };
+      ih.keydownListener = wrapped;
+      container.addEventListener('keydown', wrapped);
+    }
+
     // Hard-debounced fit on window resize (avoid per-frame WASM resize storm).
     // Also watch .term-wrap directly: the topbar height grows when the title
     // first patches in or the user renames it, which shrinks .term-wrap
