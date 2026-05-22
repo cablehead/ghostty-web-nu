@@ -111,7 +111,10 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       } else if ($requested_sid in $live_sids) {
         $requested_sid
       } else {
-        $bootstrap | first | get sid
+        # Hard refresh loses $selectedSid (datastar signals reset to defaults).
+        # Fall back to the most-recently-active session so a refresh lands on
+        # the tab the user was last typing in, not whichever sid hashed first.
+        $bootstrap | sort-by last_input_ms -r | first | get sid
       }
 
       # Build a single stream: a synthetic init event first, then bus events
