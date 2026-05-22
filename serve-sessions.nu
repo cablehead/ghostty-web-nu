@@ -54,7 +54,14 @@ def save-title [new: string]: nothing -> nothing {
 # corner of the focused pane (driven by the $focusedDims signal), not the
 # sidebar labels.
 def render-list [ptys: list, selected: string]: nothing -> string {
-  let items = $ptys | each {|p|
+  # Sort by most recent input activity. `pty list` seeds last_input_ms to
+  # session creation time and bumps it on every /pty/input write, so a
+  # freshly-spawned tab opens at the top and the tab you most recently
+  # typed in floats up. Re-renders only fire when `pty.events` ticks
+  # (created/closed/resized/meta/touched) or nav happens, so the list
+  # doesn't shuffle mid-keystroke; the "touched" event is emitted from
+  # the Rust side only when a bump actually moves a sid to the top.
+  let items = $ptys | sort-by last_input_ms -r | each {|p|
     let label = $p.meta.label? | default "nu"
     let cls = if $p.sid == $selected { "selected" } else { "" }
     # @post('/nav') sends all $signals as JSON. We set $sid (the target)
