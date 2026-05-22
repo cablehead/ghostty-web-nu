@@ -60,7 +60,8 @@ def render-list [ptys: list, selected: string]: nothing -> string {
     # @post('/nav') sends all $signals as JSON. We set $sid (the target)
     # before posting so the server knows which session to select.
     let onclick = $"$sid = '($p.sid)'; @post\('/nav'\)"
-    $"<li class='($cls)'><button type='button' data-on:click=\"($onclick)\">($label)<small>($p.sid | str substring 0..8)</small></button></li>"
+    let onclose = $"@post\('/pty/close?sid=($p.sid)'\)"
+    $"<li class='($cls)'><button type='button' class='row' data-on:click=\"($onclick)\">($label)<small>($p.sid | str substring 0..8)</small></button><button type='button' class='close' data-on:click=\"($onclose)\" title='Close'>×</button></li>"
   } | str join ""
   $"<aside id='sessions-list'><header>Sessions <button type='button' class='new-btn' data-on:click=\"@post\('/pty/new'\)\" title='New session'>+</button></header><ul>($items)</ul></aside>"
 }

@@ -8,7 +8,7 @@
     :root {
       --bg: #1e1e1e; --fg: #d4d4d4;
       --pane: #161616; --pane-border: #2a2a2a;
-      --sel: #2d4f7c; --sel-fg: #ffffff; --dim: #888;
+      --sel: #2a9d4a; --sel-blur: #2d4f7c; --sel-fg: #ffffff; --dim: #888;
       --chrome: #252525;
     }
     html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
@@ -18,14 +18,19 @@
     aside header .new-btn { background: transparent; color: inherit; border: 1px solid var(--pane-border); border-radius: 3px; padding: 0 .5rem; font: inherit; cursor: pointer; line-height: 1.4; }
     aside header .new-btn:hover { background: #222; color: var(--fg); }
     aside ul { list-style: none; margin: 0; padding: 0; }
-    aside li button { display: block; width: 100%; text-align: left; background: transparent; color: inherit; border: 0; border-bottom: 1px solid var(--pane-border); padding: .4rem .75rem; font: inherit; cursor: pointer; }
-    aside li button:hover { background: #222; }
-    aside li.selected button { background: var(--sel); color: var(--sel-fg); }
+    aside li { display: flex; align-items: stretch; border-bottom: 1px solid var(--pane-border); }
+    aside li .row { flex: 1; min-width: 0; text-align: left; background: transparent; color: inherit; border: 0; padding: .4rem .75rem; font: inherit; cursor: pointer; overflow: hidden; }
+    aside li .row:hover { background: #222; }
+    aside li.selected .row { background: var(--sel-blur); color: var(--sel-fg); }
+    body:has(.term-wrap:focus-within) aside li.selected .row { background: var(--sel); }
+    aside li .close { flex: 0 0 auto; width: 1.75rem; background: transparent; color: inherit; border: 0; padding: 0; font: inherit; cursor: pointer; opacity: 0; transition: opacity .1s; }
+    aside li:hover .close, aside li.selected .close { opacity: .6; }
+    aside li .close:hover { opacity: 1; color: #ff7676; background: #222; }
     aside li small { display: block; font-size: 11px; opacity: .6; }
     /* main is a grid: topbar | (terminal + rightbar) | statusbar. The
        three chrome bars frame the terminal on top/right/bottom; the left
        edge is the sidebar border. The topbar shows the current window title
-       (click or Alt+R to rename); the rightbar stays a cosmetic sliver. */
+       (click or Alt+Shift+R to rename); the rightbar stays a cosmetic sliver. */
     main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; overflow: hidden; }
     .topbar {
       background: var(--chrome); padding: .15rem .75rem;
@@ -37,7 +42,8 @@
     }
     .title-display:hover { background: #2f2f2f; color: var(--fg); }
     .middle { display: grid; grid-template-columns: 1fr 1ch; min-height: 0; }
-    .term-wrap { position: relative; min-height: 0; overflow: hidden; }
+    .term-wrap { position: relative; min-height: 0; overflow: hidden; transition: opacity .15s; }
+    .term-wrap:not(:focus-within) { opacity: .55; }
     #terminal { position: absolute; inset: 0; }
     .rightbar { background: var(--chrome); }
     .statusbar {
@@ -90,12 +96,12 @@
     "renameTab": "window.app.openRenameTab()"
   }'
   data-keymap='{
-    "alt+n": "new",
+    "alt+t": "new",
     "alt+d": "close",
     "alt+j": "next",
     "alt+k": "prev",
-    "alt+r": "rename",
-    "alt+l": "renameTab"
+    "alt+r": "renameTab",
+    "alt+shift+r": "rename"
   }'
 >
   <!-- Server overwrites this on every event. The initial placeholder
@@ -103,13 +109,13 @@
   <aside id="sessions-list"><header>Sessions</header></aside>
 
   <main>
-    <!-- Topbar shows the current server-wide title. Click (or Alt+R) opens
-         the rename modal; the modal's draft signal stays separate from
+    <!-- Topbar shows the current server-wide title. Click (or Alt+Shift+R)
+         opens the rename modal; the modal's draft signal stays separate from
          $title so Esc-to-cancel never disturbs the committed value. -->
     <div class="topbar">
       <span
         class="title-display"
-        title="Rename (Alt+R)"
+        title="Rename (Alt+Shift+R)"
         data-text="$title || 'untitled'"
         data-on:click="$draft = $title; $renameMode = 'title'; $renaming = true"></span>
     </div>
@@ -131,7 +137,7 @@
     </footer>
   </main>
 
-  <!-- Hidden trigger so the JS-only Alt+L action can seed signals through
+  <!-- Hidden trigger so the JS-only Alt+R action can seed signals through
        datastar's expression evaluator (the action handler is a `new Function`
        and can't touch signals directly). The action writes the current tab's
        label into el.dataset.label, then clicks; this expression copies it
@@ -190,12 +196,19 @@
       rt = setTimeout(() => fit.fit(), 200);
     });
 
-    // Input -> /pty/input (keyed by currently-attached sid). Coalesce a
-    // 20ms burst into one POST: each request runs the full nushell-closure
-    // dispatch in http-nu, so collapsing keystroke bursts cuts that cost
-    // proportionally. Trailing-edge timer caps added echo latency at 20ms.
-    // Sid is captured at enqueue so a mid-window tab switch can't ship the
-    // old sid's bytes to the new pty; attachTo also flushes before switching.
+    // Input -> /pty/input (keyed by currently-attached sid).
+    //
+    // Two strategies kept side-by-side so we can A/B the feel:
+    //   sendInputDirect    -- one POST per keystroke. Default now that the
+    //                         Rust fast-path makes /pty/input ~0ms server-
+    //                         side; per-request HTTP framing is cheap
+    //                         enough on localhost that no coalescing
+    //                         earns its added latency.
+    //   sendInputCoalesced -- trailing-edge 20ms timer; bursts collapse
+    //                         into one POST. Sid captured at enqueue and
+    //                         flushed from attachTo so a mid-window tab
+    //                         switch can't ship old bytes to a new pty.
+    //                         Swap term.onData below to feel-test.
     let currentSid = null;
     let currentEs = null;
     let inputBuf = '';
@@ -214,11 +227,21 @@
         body,
       }).catch(() => {});
     }
-    term.onData((d) => {
-      if (!currentSid) return;
+    function sendInputCoalesced(d) {
       inputBuf += d;
       inputSid = currentSid;
       if (!inputTimer) inputTimer = setTimeout(flushInput, 20);
+    }
+    function sendInputDirect(d) {
+      fetch('/pty/input?sid=' + encodeURIComponent(currentSid), {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: d,
+      }).catch(() => {});
+    }
+    term.onData((d) => {
+      if (!currentSid) return;
+      sendInputDirect(d);
     });
 
     // Resize -> /pty/resize
@@ -312,7 +335,7 @@
         if (!items.length) return;
         const idx = items.findIndex((li) => li.classList.contains('selected'));
         const next = items[((idx < 0 ? 0 : idx) + dir + items.length) % items.length];
-        next.querySelector('button')?.click();
+        next.querySelector('.row')?.click();
       },
       openRename() {
         // Action handlers are raw JS strings (new Function), so they can't
@@ -329,7 +352,7 @@
         // label. Stash it on the hidden trigger's dataset and click -- the
         // trigger's data-on:click copies dataset.label into $draft and opens
         // the modal in tab mode (mirrors the title-display click pattern).
-        const btn = document.querySelector('#sessions-list li.selected button');
+        const btn = document.querySelector('#sessions-list li.selected .row');
         if (!btn) return;
         const label = btn.firstChild?.textContent?.trim() ?? '';
         const trig = document.getElementById('rename-tab-trigger');
@@ -369,6 +392,14 @@
       // While the rename modal owns focus, its input handles Enter/Esc/typing
       // itself -- don't pull Alt+R/J/K/etc out from under the user.
       if (document.activeElement?.classList.contains('modal-input')) return;
+      // Enter pressed outside the terminal redirects focus into it -- lets
+      // the user return from sidebar buttons without reaching for the mouse.
+      if (e.key === 'Enter' && !container.contains(document.activeElement)) {
+        e.preventDefault();
+        e.stopPropagation();
+        term.focus();
+        return;
+      }
       const id = readJson('keymap')[comboKey(e)];
       if (!id) return;
       const js = readJson('actions')[id];

@@ -64,13 +64,13 @@
       const sid = created.sid;
       setStatus(`sid ${sid.slice(0, 8)}`);
 
-      // 2. wire user input -> POST /pty/input. Coalesce a 20ms burst into
-      // one POST: each request runs the full nushell-closure dispatch in
-      // http-nu, so collapsing keystroke bursts cuts that cost. Trailing-
-      // edge timer caps added echo latency at 20ms.
+      // 2. wire user input -> POST /pty/input. Two strategies kept side-
+      // by-side so we can A/B the feel; default is direct (one POST per
+      // keystroke) now that the Rust fast-path makes /pty/input ~0ms
+      // server-side. Swap term.onData below to feel-test coalescing.
       let inputBuf = '';
       let inputTimer = null;
-      term.onData((data) => {
+      function sendInputCoalesced(data) {
         inputBuf += data;
         if (inputTimer) return;
         inputTimer = setTimeout(() => {
@@ -83,6 +83,16 @@
             body,
           }).catch(() => {});
         }, 20);
+      }
+      function sendInputDirect(data) {
+        fetch('/pty/input?sid=' + encodeURIComponent(sid), {
+          method: 'POST',
+          headers: { 'content-type': 'application/octet-stream' },
+          body: data,
+        }).catch(() => {});
+      }
+      term.onData((data) => {
+        sendInputDirect(data);
       });
 
       // 3. wire resize -> POST /pty/resize.
