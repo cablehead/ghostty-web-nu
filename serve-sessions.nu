@@ -10,6 +10,7 @@
 #   POST /title             -> set the server-wide window title (signal: title)
 #   POST /pty/create        -> mint a new pty + return sid
 #   POST /pty/new           -> spawn a pty for the calling tab and select it
+#   POST /pty/label         -> set the selected pty's label (meta.label)
 #   POST /pty/close?sid=... -> destroy pty
 #   POST /pty/input?sid=... -> raw input bytes to pty stdin
 #   POST /pty/resize?sid=...-> resize pty (cols, rows in JSON body)
@@ -19,22 +20,33 @@ use http-nu/datastar *
 
 const STATIC = (path self | path dirname | path join "www")
 
-# One title per http-nu instance, shown in every tab's <title>. Stashed in
-# /tmp so it survives SSE reconnects within a server run; cleared on reboot.
-# First read seeds a random adj-noun so the three-tabs-at-three-hosts case
-# starts out distinguishable without any user action.
-const TITLE_FILE = "/tmp/ghostty-web-nu.title"
+# One title per http-nu instance, shown in every tab's <title>. Held in
+# http-nu's in-memory SQLite (`stor`) so it survives SSE reconnects within a
+# server run; cleared on restart. First read seeds a random adj-noun so the
+# three-tabs-at-three-hosts case starts out distinguishable without any user
+# action.
 const TITLE_ADJ = [calm bold brave bright crisp eager fierce gentle happy keen lucky merry quiet swift wild]
 const TITLE_NOUN = [otter sparrow fox heron stag panda lynx hare badger marten falcon ferret weasel mink]
 
-def load-title []: nothing -> string {
-  if ($TITLE_FILE | path exists) {
-    open --raw $TITLE_FILE | str trim
-  } else {
+def ensure-title-table []: nothing -> nothing {
+  let exists = (stor open
+    | query db "select name from sqlite_master where type='table' and name='title'"
+    | length) > 0
+  if not $exists {
+    stor create -t title -c {val: str} | ignore
     let t = $"($TITLE_ADJ | shuffle | first)-($TITLE_NOUN | shuffle | first)"
-    $t | save -f $TITLE_FILE
-    $t
+    stor insert -t title -d {val: $t} | ignore
   }
+}
+
+def load-title []: nothing -> string {
+  ensure-title-table
+  stor open | query db "select val from title limit 1" | get 0.val
+}
+
+def save-title [new: string]: nothing -> nothing {
+  ensure-title-table
+  stor update -t title -u {val: $new} | ignore
 }
 
 # Render the left-pane session list as plain HTML. Returns a string suitable
@@ -177,15 +189,31 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
     }
 
     [POST, "/title"] => {
-      # Set the per-server window title. Persist to /tmp so SSE reconnects in
-      # the same server run see the right value; broadcast via title.events
-      # so other tabs update document.title live. title.events carries the
-      # originating connId; the /sse subscription filters out matches so the
-      # typer doesn't get its own echo clobbering a focused <input>.
+      # Set the per-server window title. Persist via `stor` so SSE reconnects
+      # in the same server run see the right value; broadcast via
+      # title.events so other tabs update document.title live. title.events
+      # carries the originating connId; the /sse subscription filters out
+      # matches so the typer doesn't get its own echo clobbering a focused
+      # <input>.
       let signals = $body | from datastar-signals $req
       let new = ($signals.title? | default "" | str trim)
-      $new | save -f $TITLE_FILE
+      save-title $new
       {connId: ($signals.connId? | default ""), title: $new} | .bus pub "title.events"
+      null | metadata set { merge {'http.response': {status: 204}} }
+    }
+
+    [POST, "/pty/label"] => {
+      # Rename a pty's left-pane label. The label lives in the pty session's
+      # meta map; `pty meta set` mutates it and publishes a `pty.events {event:
+      # meta}` ping, which the /sse handler already re-renders the list on.
+      # No connId filtering needed -- the list is server-projected (button
+      # text), not an input the typer is focused on.
+      let signals = $body | from datastar-signals $req
+      let sid = ($signals.selectedSid? | default "")
+      let new = ($signals.label? | default "" | str trim)
+      if $sid != "" {
+        pty meta set $sid "label" $new
+      }
       null | metadata set { merge {'http.response': {status: 204}} }
     }
 
