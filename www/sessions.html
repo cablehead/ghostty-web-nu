@@ -42,8 +42,8 @@
     }
     .title-display:hover { background: #2f2f2f; color: var(--fg); }
     .middle { display: grid; grid-template-columns: 1fr 1ch; min-height: 0; }
-    .term-wrap { position: relative; min-height: 0; overflow: hidden; transition: opacity .15s; }
-    .term-wrap:not(:focus-within) { opacity: .55; }
+    .term-wrap { position: relative; min-height: 0; overflow: hidden; transition: opacity .15s; opacity: .55; }
+    body:has(.term-wrap:focus-within) .term-wrap { opacity: 1; }
     #terminal { position: absolute; inset: 0; }
     .rightbar { background: var(--chrome); }
     .statusbar {
@@ -190,11 +190,20 @@
     fit.fit();
 
     // Hard-debounced fit on window resize (avoid per-frame WASM resize storm).
+    // Also watch .term-wrap directly: the topbar height grows when the title
+    // first patches in or the user renames it, which shrinks .term-wrap
+    // without firing a window resize. Without a re-fit the canvas (sized at
+    // load time) extends past .term-wrap's overflow:hidden box and the
+    // bottom row gets clipped. fit.observeResize() debounces at 100ms which
+    // wasn't enough to avoid freezing during window drag -- share the 200ms
+    // timer instead.
     let rt = null;
-    window.addEventListener('resize', () => {
+    function scheduleFit() {
       clearTimeout(rt);
       rt = setTimeout(() => fit.fit(), 200);
-    });
+    }
+    window.addEventListener('resize', scheduleFit);
+    new ResizeObserver(scheduleFit).observe(document.querySelector('.term-wrap'));
 
     // Input -> /pty/input (keyed by currently-attached sid).
     //
