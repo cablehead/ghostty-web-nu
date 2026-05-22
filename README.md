@@ -1,21 +1,24 @@
 # ghostty-web-nu
 
-[ghostty-web](https://github.com/coder/ghostty-web) ->
-[http-nu](https://github.com/cablehead/http-nu) ->
-[Nushell](https://www.nushell.sh): the
-[Ghostty](https://github.com/ghostty-org/ghostty) VT100 emulator in a browser
-tab, talking to an embedded Nushell REPL over SSE.
+The [Ghostty](https://github.com/ghostty-org/ghostty) VT100 emulator
+([ghostty-web](https://github.com/coder/ghostty-web)) in a browser tab,
+talking to an embedded [Nushell](https://www.nushell.sh) REPL over SSE.
+[http-nu](https://github.com/cablehead/http-nu) bridges the browser to a
+pty and runs the REPL; a server-side [wezterm-term](https://github.com/wez/wezterm)
+stands in for the browser terminal -- tracking screen + scrollback so a
+reattach replays clean, and answering VT queries from the pty when no
+client is attached.
 
 https://github.com/user-attachments/assets/a87f9bc1-2005-412d-bfa7-831e888fd4ab
 
 ## Run
 
-You need the `pty` branch of http-nu -- it ships the `pty` command set and the
-`repl` subcommand that the embedded path execs into.
+You need the `pty-wezterm-term` branch of http-nu -- it ships the `pty`
+command set and the `repl` subcommand that the embedded path execs into.
 
 ```sh
-git clone --branch pty https://github.com/cablehead/http-nu.git
-cd http-nu && cargo build
+git clone --branch pty-wezterm-term https://github.com/cablehead/http-nu.git
+cd http-nu && cargo build --release
 ```
 
 Then in this repo:
@@ -54,10 +57,22 @@ something else" while debugging.
 | File | What it serves |
 | --- | --- |
 | `serve.nu` + `www/index.html` | Single-pane terminal. Whole canvas is one REPL. |
-| `serve-sessions.nu` + `www/sessions.html` | Multi-pane. Left list of sessions, right pane shows the selected one. New: `Opt+N`. Switch: `Opt+J` / `Opt+K`. Close: `Opt+D`. |
+| `serve-sessions.nu` + `www/sessions.html` | Multi-pane. Sidebar of sessions, focused pane on the right. Tabs sort by most-recent input; a hard refresh lands on the tab you were last typing in. A server-wide title sits in the topbar; the focused pane's `cols x rows` mirrors into the status footer. |
 
 Both pages use the same `/pty/*` endpoints; the sessions surface adds
 `/sse` and `/nav` on top for the projected session list.
+
+Sessions keymap:
+
+| Key | Action |
+| --- | --- |
+| `Alt+T` | New session |
+| `Alt+D` | Close current session |
+| `Alt+J` / `Alt+K` | Cycle to next / previous |
+| `Alt+R` | Rename current tab (stored as pty meta) |
+| `Alt+Shift+R` | Rename the window title (persisted in `stor`) |
+| `Cmd+C` | Copy current selection (ghostty-web's auto-copy-on-mouseup is disabled) |
+| `` Cmd+` `` | Falls through to the OS window switcher |
 
 ## How it hangs together
 
@@ -65,42 +80,48 @@ Both pages use the same `/pty/*` endpoints; the sessions surface adds
 flowchart LR
     Browser["browser tab<br>ghostty-web<br>WASM + Canvas"]
     HttpNu["http-nu<br>serve.nu /<br>serve-sessions.nu"]
-    Parser["vt100::Parser<br>(server-side<br>virtual screen)"]
+    Parser["wezterm-term<br>(server-side virtual<br>screen + scrollback)"]
     Pty["pty pair<br>master &lt;-&gt; slave"]
     Nu["embedded nushell<br>http-nu repl"]
 
-    Browser -- "POST /pty/input raw" --> HttpNu
+    Browser -- "POST /pty/input raw<br>(one POST per keystroke)" --> HttpNu
     Browser -- "POST /pty/resize {cols, rows}" --> HttpNu
-    HttpNu -- "GET /pty/stream SSE base64<br>(state snapshot first, then live tail)" --> Browser
+    HttpNu -- "GET /pty/stream SSE base64<br>(scrollback snapshot first, then live tail)" --> Browser
 
-    HttpNu -- "pty open: openpty + fork+exec http-nu repl" --> Nu
+    HttpNu -- "pty open: openpty + fork+exec /proc/self/exe repl" --> Nu
     HttpNu -- "write input / ioctl TIOCSWINSZ" --> Pty
     Pty -- "read output" --> HttpNu
-    HttpNu -- "feed parser, broadcast bytes" --> Parser
+    HttpNu -- "feed terminal, broadcast bytes" --> Parser
     Pty -- "stdin / stdout / SIGWINCH" --> Nu
 ```
 
 The pty session map lives in the http-nu process. Each `sid` keeps a
-`portable_pty::MasterPty` + `Child` + a `vt100::Parser` (canonical virtual
-screen) + a single-slot output sender (see below).
+`portable_pty::MasterPty` + `Child` + a `wezterm_term::Terminal` (canonical
+virtual screen + scrollback) + a single-slot output sender (see below).
 
 ### Endpoints
 
 Single-pane (`serve.nu`):
 
 - `POST /pty/create` -- `{cols, rows}` body, returns `{sid}`.
-- `POST /pty/input?sid=` -- raw body written verbatim to pty master.
+- `POST /pty/input?sid=` -- raw body written verbatim to pty master. Served
+  by a Rust fast-path in http-nu (no nu handler invocation); bumps the
+  session's `last_input_ms` and emits a `touched` `pty.events` entry when
+  the bump moves a sid to the head of the list.
 - `POST /pty/resize?sid=` -- `{cols, rows}` -> `master.resize()` + SIGWINCH.
-- `GET  /pty/stream?sid=` -- SSE: first frame is a full screen snapshot
-  (canonical VT bytes from the server's `vt100::Parser`), subsequent frames
-  are live pty output. Each frame: `data: <base64>\n\n`.
+- `GET  /pty/stream?sid=` -- SSE: first frame is a snapshot of the full
+  scrollback + visible screen, serialized as canonical VT bytes with SGR
+  colors and attributes preserved. Subsequent frames are live pty output.
+  Each frame: `data: <base64>\n\n`.
 
 Sessions (`serve-sessions.nu`) adds:
 
 - `GET  /sse` -- projected UX state. Bootstraps the session list, then
   emits `datastar-patch-elements` and `datastar-patch-signals` deltas in
-  response to `pty.events` (created / died / resized / meta) and `nav.events`
-  (this conn's current selection).
+  response to `pty.events` (created / died / resized / meta / touched) and
+  `nav.events` (this conn's current selection). The selected sid is also
+  patched into the `$selectedSid` signal so visibility-driven SSE reconnects
+  land on the same tab.
 - `POST /nav` -- publishes `{connId, sid}` to `nav.events`.
 - `POST /pty/new` -- spawn a fresh session and select it for the requesting
   conn (`pty open --embedded` by default; honors `GHOSTTY_WEB_NU_CMD`).
@@ -108,18 +129,25 @@ Sessions (`serve-sessions.nu`) adds:
 
 ## Server-side terminal state
 
-The server tees every pty read into a `vt100::Parser` and into a single
-output channel:
+The server tees every pty read into a `wezterm_term::Terminal` and into a
+single output channel:
 
 - **Last-attach-wins.** A new `/pty/stream` attach replaces whatever sender
   was installed; the previous SSE drains and closes. There's at most one
   active consumer per sid. (Reattach UX: open the same URL again, the older
   tab quietly stops receiving.)
-- **State snapshot on attach.** Before the new sender starts forwarding live
-  bytes, the server emits `parser.state_formatted()` -- a canonical VT byte
-  sequence that reproduces the current screen. So an attach in the middle
-  of a session lands clean: no stale DSR queries, no partial sequences, no
-  out-of-order mode toggles.
+- **Scrollback snapshot on attach.** Before live bytes start flowing, the
+  server walks the terminal's scrollback + visible screen and emits a
+  canonical VT byte sequence (SGR colors + attributes preserved) that
+  reproduces both history and the current cursor. An attach mid-session
+  lands clean: no stale DSR queries, no partial sequences, no out-of-order
+  mode toggles, and the user can scroll back into the history that
+  predates them.
+- **Scrollback cap surfaced to the client.** http-nu caps wezterm-term's
+  scrollback (via `TerminalConfiguration`) and exposes the limit as
+  `$HTTP_NU.pty_scrollback_lines`. `serve-sessions.nu` threads it into the
+  page so the browser-side `Terminal({scrollback})` matches what the
+  server actually retains.
 - **Initial size sync.** On attach, the browser pushes `/pty/resize` with
   its current term dimensions, so the pty matches the visible viewport from
   byte zero rather than running at the open-time 80x24.
@@ -130,6 +158,11 @@ output channel:
   zmx's [`respondToDeviceAttributes`](https://github.com/neurosnap/zmx/blob/main/src/util.zig).
   When a client is attached, the browser's own VT emulator answers and the
   server stays out of the way.
+- **Direct per-keystroke input.** `term.onData` POSTs each chunk straight
+  to `/pty/input`. The Rust fast-path makes the round-trip cheap enough on
+  localhost that no coalescing earns its added latency. A trailing-edge
+  20ms coalescer (`sendInputCoalesced` in `sessions.html`) is kept dormant
+  alongside the direct path for A/B feel-testing.
 - **Scroll preservation.** ghostty-web's `Terminal.write()` force-scrolls
   to the bottom on every call. `sessions.html` wraps it to keep your
   position when you've scrolled up; new output appends silently below the
@@ -144,8 +177,10 @@ questions without disturbing the live browser.
 
 ## Embedded REPL
 
-`pty open --embedded` execs http-nu itself with the `repl` subcommand. The
-REPL inherits all of http-nu's custom commands (`.append`, `.cat`,
+`pty open --embedded` execs `/proc/self/exe` with the `repl` subcommand --
+http-nu re-runs itself rather than resolving its binary by name, so
+swapping the binary during a dev rebuild doesn't strand existing children.
+The REPL inherits all of http-nu's custom commands (`.append`, `.cat`,
 `.static`, `.mj`, `pty open`, ...) at a real nu prompt, no separate `nu`
 binary needed.
 
