@@ -49,6 +49,59 @@ def save-title [new: string]: nothing -> nothing {
   stor update -t title -u {val: $new} | ignore
 }
 
+# Per-tab canvas pane content. Keyed by sid; in-memory SQLite so it survives
+# page refresh / SSE reconnect but not server restart (same lifetime as the
+# title and any other `stor` state). Closed tabs leave rows behind until the
+# server restarts -- harmless given the in-memory scope.
+def ensure-canvas-table []: nothing -> nothing {
+  let exists = (stor open
+    | query db "select name from sqlite_master where type='table' and name='canvas'"
+    | length) > 0
+  if not $exists {
+    stor create -t canvas -c {sid: str, html: str} | ignore
+  }
+}
+
+def load-canvas [sid: string]: nothing -> string {
+  if $sid == "" { return "" }
+  ensure-canvas-table
+  let r = (stor open | query db "select html from canvas where sid = :sid" --params {sid: $sid})
+  if ($r | is-empty) { "" } else { $r | get 0.html }
+}
+
+def save-canvas [sid: string, html: string]: nothing -> nothing {
+  if $sid == "" { return }
+  ensure-canvas-table
+  stor open | query db "delete from canvas where sid = :sid" --params {sid: $sid} | ignore
+  if $html != "" {
+    stor insert -t canvas -d {sid: $sid, html: $html} | ignore
+  }
+}
+
+# Last sid the user navigated to. Stored so out-of-process callers (curl,
+# editor extensions) can post to /canvas without having to know the sid --
+# their post lands on whichever tab is currently in front. Updated in POST
+# /nav and POST /pty/new; one-row table same shape as the title.
+def ensure-focused-table []: nothing -> nothing {
+  let exists = (stor open
+    | query db "select name from sqlite_master where type='table' and name='focused'"
+    | length) > 0
+  if not $exists {
+    stor create -t focused -c {sid: str} | ignore
+    stor insert -t focused -d {sid: ""} | ignore
+  }
+}
+
+def load-focused-sid []: nothing -> string {
+  ensure-focused-table
+  stor open | query db "select sid from focused limit 1" | get 0.sid
+}
+
+def save-focused-sid [sid: string]: nothing -> nothing {
+  ensure-focused-table
+  stor update -t focused -u {sid: $sid} | ignore
+}
+
 # Render the left-pane session list as plain HTML. Returns a string suitable
 # for `to datastar-patch-elements`. Dimensions live in the bottom-right meta
 # corner of the focused pane (driven by the $focusedDims signal), not the
@@ -68,7 +121,7 @@ def render-list [ptys: list, selected: string]: nothing -> string {
     # before posting so the server knows which session to select.
     let onclick = $"$sid = '($p.sid)'; @post\('/nav'\)"
     let onclose = $"@post\('/pty/close?sid=($p.sid)'\)"
-    $"<li class='($cls)'><button type='button' class='row' data-on:click=\"($onclick)\">($label)<small>($p.sid | str substring 0..8)</small></button><button type='button' class='close' data-on:click=\"($onclose)\" title='Close'>×</button></li>"
+    $"<li class='($cls)'><button type='button' class='row' data-on:click=\"($onclick)\">($label)<small>($p.sid | str substring 0..8)</small></button><button type='button' class='copy' data-sid='($p.sid)' title='Copy sid'><iconify-icon icon='lucide:copy'></iconify-icon></button><button type='button' class='close' data-on:click=\"($onclose)\" title='Close'>×</button></li>"
   } | str join ""
   $"<aside id='sessions-list'><header>Sessions <button type='button' class='new-btn' data-on:click=\"@post\('/pty/new'\)\" title='New session'>+</button></header><ul>($items)</ul></aside>"
 }
@@ -87,8 +140,14 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
   match [$req.method, $req.path] {
 
     [GET, "/"] => {
-      {datastar_js_path: $DATASTAR_JS_PATH, title: (load-title)}
-        | .mj ($STATIC | path join "sessions.html")
+      {
+        datastar_js_path: $DATASTAR_JS_PATH
+        title: (load-title)
+        # Server-side scrollback cap (wezterm-term's TerminalConfiguration).
+        # Sourced from the http-nu binary so the browser-side Terminal({scrollback})
+        # always matches what the pty actually retains.
+        scrollback_lines: $HTTP_NU.pty_scrollback_lines
+      } | .mj ($STATIC | path join "sessions.html")
     }
 
     [GET, "/sse"] => {
@@ -116,6 +175,9 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
         # the tab the user was last typing in, not whichever sid hashed first.
         $bootstrap | sort-by last_input_ms -r | first | get sid
       }
+      # Seed the focused sid table so out-of-process POST /canvas has a
+      # default target even before the user clicks a sidebar row.
+      save-focused-sid $initial_sid
 
       # Build a single stream: a synthetic init event first, then bus events
       # tagged by kind. (Using `prepend` rather than `append` so we don't
@@ -129,7 +191,8 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
             | each {|e| {kind: "nav", val: $e.value}} }
         { .bus sub "title.events"
             | where {|e| ($e.value.connId? | default "") != $conn_id}
-            | each {|e| {kind: "title", val: $e.value}} })
+            | each {|e| {kind: "title", val: $e.value}} }
+        { .bus sub "canvas.events" | each {|e| {kind: "canvas", val: $e.value}} })
       | prepend {kind: "init", val: {}}
       | generate {|ev, state|
           let live = (pty list)
@@ -166,9 +229,27 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
           let title_patch = if $need_title {
             ({title: $new_title} | to datastar-patch-signals)
           } else { null }
-          let out = ([$sel_patch $dims_patch $title_patch $list_patch] | where {|x| $x != null})
-          {out: $out, next: {sel: $new_sel, dims: $new_dims, title: $new_title}}
-        } {sel: $initial_sid, dims: "", title: (load-title)}
+          # Canvas: re-load from `stor` whenever the selected sid changes or
+          # a canvas.events ping arrives. Other event kinds (pty/title) skip
+          # the query. Patch outer-replaces #canvas; empty html -> bare
+          # section (matches CSS :empty, collapses the column). Non-empty
+          # wraps the html in a .canvas-content sibling so the resizer drag
+          # strip has a stable home -- see .canvas-resizer in sessions.html.
+          let should_reload = ($ev.kind == "init") or ($ev.kind == "canvas") or ($new_sel != $state.sel)
+          let new_canvas = if $should_reload { load-canvas $new_sel } else { $state.canvas }
+          let need_canvas = ($ev.kind == "init") or ($new_canvas != $state.canvas)
+          let canvas_patch = if $need_canvas {
+            let inner = if $new_canvas == "" {
+              ""
+            } else {
+              $"<div class='canvas-resizer'></div><div class='canvas-content'>($new_canvas)</div>"
+            }
+            ($"<section id='canvas' class='canvas'>($inner)</section>"
+             | to datastar-patch-elements --selector "#canvas")
+          } else { null }
+          let out = ([$sel_patch $dims_patch $title_patch $list_patch $canvas_patch] | where {|x| $x != null})
+          {out: $out, next: {sel: $new_sel, dims: $new_dims, title: $new_title, canvas: $new_canvas}}
+        } {sel: $initial_sid, dims: "", title: (load-title), canvas: (load-canvas $initial_sid)}
       | flatten
       | to sse
       | metadata set --content-type "text/event-stream"
@@ -176,9 +257,11 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
 
     [POST, "/nav"] => {
       let signals = $body | from datastar-signals $req
+      let sid = ($signals.sid? | default "")
+      if $sid != "" { save-focused-sid $sid }
       {
         connId: ($signals.connId? | default "")
-        sid: ($signals.sid? | default "")
+        sid: $sid
       } | .bus pub "nav.events"
       null | metadata set { merge {'http.response': {status: 204}} }
     }
@@ -195,6 +278,7 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       } else {
         pty open $cmd
       }
+      save-focused-sid $sid
       {connId: ($signals.connId? | default ""), sid: $sid} | .bus pub "nav.events"
       null | metadata set { merge {'http.response': {status: 204}} }
     }
@@ -226,6 +310,57 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
         pty meta set $sid "label" $new
       }
       null | metadata set { merge {'http.response': {status: 204}} }
+    }
+
+    [POST, "/canvas"] => {
+      # External entry point for the canvas pane. Body becomes the canvas
+      # content for the sid in ?sid=<sid>; empty body clears it. The html is
+      # persisted in `stor` (per-tab, survives refresh) and `canvas.events`
+      # is published so any /sse stream currently viewing that sid patches
+      # immediately. In-process callers can skip the HTTP hop by calling
+      # save-canvas directly and publishing {sid: ...} themselves.
+      #
+      # Dispatch on Content-Type so callers can lean on http-nu's renderers:
+      #
+      #   text/markdown               -> .md
+      #   text/html (or unset)        -> raw HTML
+      #   text/plain  + ?lang=<l>     -> .highlight <l>, wrapped in <pre>
+      #   text/plain                  -> wrapped in <pre> as-is
+      #
+      #   curl -X POST -H 'content-type: text/markdown' --data-binary @r.md  localhost:5003/canvas
+      #   curl -X POST -H 'content-type: text/plain' --data-binary @main.rs 'localhost:5003/canvas?lang=rust'
+      #   curl -X POST localhost:5003/canvas    # clears the focused tab's canvas
+      #
+      # ?sid=<sid> targets a specific tab; without it, falls back to the
+      # last-focused sid (updated whenever the user clicks a sidebar row or
+      # spawns a tab). 400 if no tab has ever been focused.
+      let qsid = ($req.query.sid? | default "" | str trim)
+      let sid = if $qsid == "" { load-focused-sid } else { $qsid }
+      if $sid == "" {
+        "no focused sid" | metadata set { merge {'http.response': {status: 400}} }
+      } else {
+        let ct = (($req.headers | get "content-type" | default "") | split row ";" | get 0 | str trim | str downcase)
+        let body_s = ($body | default "")
+        let html = if $body_s == "" {
+          ""
+        } else {
+          match $ct {
+            "text/markdown" => ($body_s | .md | get __html)
+            "text/plain" => {
+              let lang = ($req.query.lang? | default "")
+              if $lang != "" {
+                $"<pre>($body_s | .highlight $lang)</pre>"
+              } else {
+                $"<pre>($body_s)</pre>"
+              }
+            }
+            _ => $body_s   # text/html or unspecified: trust the caller
+          }
+        }
+        save-canvas $sid $html
+        {sid: $sid} | .bus pub "canvas.events"
+        null | metadata set { merge {'http.response': {status: 204}} }
+      }
     }
 
     [POST, "/pty/create"] => {

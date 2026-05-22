@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>{{ title or "ghostty-web-nu sessions" }}</title>
   <script type="module" src="{{ datastar_js_path }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/iconify-icon@2/dist/iconify-icon.min.js"></script>
   <style>
     :root {
       --bg: #1e1e1e; --fg: #d4d4d4;
@@ -12,7 +13,7 @@
       --chrome: #252525;
     }
     html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-    body { display: grid; grid-template-columns: 14rem 1fr; height: 100dvh; }
+    body { display: grid; grid-template-columns: 14rem 1fr auto; height: 100dvh; }
     aside { background: var(--pane); border-right: 1px solid var(--pane-border); overflow-y: auto; min-height: 0; }
     aside header { padding: .4rem .5rem .4rem .75rem; border-bottom: 1px solid var(--pane-border); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; justify-content: space-between; }
     aside header .new-btn { background: transparent; color: inherit; border: 1px solid var(--pane-border); border-radius: 3px; padding: 0 .5rem; font: inherit; cursor: pointer; line-height: 1.4; }
@@ -26,6 +27,12 @@
     aside li .close { flex: 0 0 auto; width: 1.75rem; background: transparent; color: inherit; border: 0; padding: 0; font: inherit; cursor: pointer; opacity: 0; transition: opacity .1s; }
     aside li:hover .close, aside li.selected .close { opacity: .6; }
     aside li .close:hover { opacity: 1; color: #ff7676; background: #222; }
+    aside li .copy { flex: 0 0 auto; width: 1.75rem; display: flex; align-items: center; justify-content: center; background: transparent; color: inherit; border: 0; padding: 0; font: inherit; cursor: pointer; opacity: 0; transition: opacity .1s; }
+    aside li:hover .copy, aside li.selected .copy { opacity: .6; }
+    aside li .copy:hover { opacity: 1; background: #222; }
+    aside li .copy iconify-icon { font-size: 13px; }
+    /* Brief flash after a successful copy. JS toggles .copied on the button. */
+    aside li .copy.copied { opacity: 1; color: var(--sel); }
     aside li small { display: block; font-size: 11px; opacity: .6; }
     /* main is a grid: topbar | (terminal + rightbar) | statusbar. The
        three chrome bars frame the terminal on top/right/bottom; the left
@@ -54,6 +61,38 @@
       font-size: 11px; line-height: 1;
       font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
+    /* Right-side canvas pane. Lives in body's third grid column (`auto`), so
+       when the element is :empty (no children) the column collapses to 0 and
+       the terminal pane gets the full width. Width comes from a CSS variable
+       --canvas-w so the resizer below can adjust it live; persisted across
+       reloads in localStorage. Server pushes content via the same /sse stream
+       that drives the sessions list and title -- see the `canvas.events` bus
+       topic in serve-sessions.nu. */
+    .canvas {
+      position: relative;
+      width: var(--canvas-w, 32rem); min-height: 0; overflow: auto;
+      background: var(--pane); border-left: 1px solid var(--pane-border);
+      padding: .75rem; box-sizing: border-box;
+      font-size: 12px;
+    }
+    .canvas:empty { display: none; }
+    .canvas pre { margin: 0; white-space: pre; }
+    /* 6px-wide invisible drag strip straddling the canvas's left border.
+       Brightens on hover and during drag. */
+    .canvas-resizer {
+      position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
+      cursor: col-resize; background: transparent;
+      transition: background .15s;
+    }
+    .canvas-resizer:hover, body.canvas-dragging .canvas-resizer {
+      background: var(--sel-blur);
+    }
+    .canvas-content { height: 100%; }
+    /* During drag, suppress text selection and let mouse events fall through
+       the term canvas / canvas content so xterm doesn't capture them. */
+    body.canvas-dragging { user-select: none; cursor: col-resize; }
+    body.canvas-dragging .term-wrap, body.canvas-dragging .canvas-content { pointer-events: none; }
+
     /* Rename modal. Backdrop is a fullscreen translucent overlay; the box
        floats near the top so it doesn't fight with the user's gaze on the
        sidebar / terminal. Click outside to cancel; Enter saves; Esc cancels.
@@ -137,6 +176,10 @@
     </footer>
   </main>
 
+  <!-- Server-pushed canvas pane. Empty -> collapses to 0 width via .canvas:empty.
+       Patched by serve-sessions.nu's /sse stream in response to canvas.events. -->
+  <section id="canvas" class="canvas"></section>
+
   <!-- Hidden trigger so the JS-only Alt+R action can seed signals through
        datastar's expression evaluator (the action handler is a `new Function`
        and can't touch signals directly). The action writes the current tab's
@@ -175,12 +218,63 @@
     import { init, Terminal, FitAddon } from './ghostty-web.js';
     await init();
 
+    // Restore the canvas width set by the last drag (see canvas-resizer
+    // handler below). Done before terminal init so the initial fit.fit()
+    // measures with the right .term-wrap width.
+    {
+      const w = localStorage.getItem('canvas-w');
+      if (w) document.body.style.setProperty('--canvas-w', w);
+    }
+
+    // Sidebar copy-sid button. Delegated since session list rows are
+    // re-rendered by every datastar patch of #sessions-list. data-sid on the
+    // button carries the full sid; the row label only shows the prefix.
+    document.addEventListener('click', (e) => {
+      const btn = e.target instanceof HTMLElement ? e.target.closest('.copy') : null;
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const sid = btn.dataset.sid || '';
+      if (!sid) return;
+      navigator.clipboard?.writeText(sid).then(() => {
+        btn.classList.add('copied');
+        setTimeout(() => btn.classList.remove('copied'), 600);
+      }).catch(() => {});
+    });
+
+    // Drag-to-resize the canvas pane. Delegated on document because the
+    // .canvas-resizer element gets re-created on every datastar patch of
+    // #canvas, so per-element listeners would be stale. The .term-wrap
+    // ResizeObserver (later in this script) catches the column-width
+    // change and triggers a debounced fit.
+    document.addEventListener('mousedown', (e) => {
+      if (!(e.target instanceof HTMLElement) || !e.target.classList.contains('canvas-resizer')) return;
+      e.preventDefault();
+      document.body.classList.add('canvas-dragging');
+      const onMove = (ev) => {
+        // Canvas occupies the right edge; new width = distance from mouse to viewport right.
+        // Clamp so the terminal stays at least 24rem wide.
+        const min = 12 * 16, maxTake = window.innerWidth - 24 * 16;
+        const w = Math.max(min, Math.min(maxTake, window.innerWidth - ev.clientX));
+        document.body.style.setProperty('--canvas-w', w + 'px');
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('canvas-dragging');
+        const w = document.body.style.getPropertyValue('--canvas-w');
+        if (w) localStorage.setItem('canvas-w', w);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
       theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
-      scrollback: 10000,
+      scrollback: {{ scrollback_lines }},
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -188,6 +282,38 @@
     term.open(container);
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     fit.fit();
+
+    // Focus policy. The terminal owns keyboard focus by default; the
+    // rename-modal input is the only other element allowed to hold focus,
+    // and only while the modal is open. focusOwner() names the rightful
+    // owner; enforceFocus() drives toward it. focusin/focusout listeners
+    // call enforceFocus from a microtask so the decision lands *after*
+    // the browser's in-flight focus shuffling for the current user action
+    // has settled (mousedown -> button-focus, modal-show -> input-focus,
+    // backdrop-click -> input-blur), but before the next event or paint.
+    // New legitimate focus holders get added to focusOwner(); everything
+    // else inherits the rebounce automatically. See docs/adr/0001.
+    const modalInput = document.querySelector('.modal-input');
+    function focusOwner() {
+      // Modal backdrop is display:none while closed, so the input's
+      // offsetParent goes null then. While open, the input owns.
+      if (modalInput && modalInput.offsetParent !== null) return 'modal';
+      return 'terminal';
+    }
+    function enforceFocus() {
+      const a = document.activeElement;
+      switch (focusOwner()) {
+        case 'modal':
+          if (a !== modalInput) modalInput.focus();
+          break;
+        case 'terminal':
+          if (!container.contains(a)) term.focus();
+          break;
+      }
+    }
+    document.addEventListener('focusin',  () => queueMicrotask(enforceFocus));
+    document.addEventListener('focusout', () => queueMicrotask(enforceFocus));
+    enforceFocus(); // initial: terminal grabs focus on page load
 
     // ghostty-web auto-copies to the system clipboard on every mouseup /
     // dblclick that produces a selection (line ~1949/1957). We want Cmd+C
@@ -316,9 +442,25 @@
       if (sid === currentSid) return;
       if (inputTimer) { clearTimeout(inputTimer); flushInput(); }
       if (currentEs) { try { currentEs.close(); } catch {} currentEs = null; }
-      term.clear();
+      // Full reset, not clear: clear() only writes \x1b[2J\x1b[H (visible
+      // screen only), leaving the previous tab's scrollback in the buffer.
+      // reset() free's the WASM terminal and rebuilds it, so the server's
+      // snapshot lands on an empty scrollback and we don't carry tab-A
+      // history into tab B.
+      term.reset();
       currentSid = sid;
       if (!sid) return;
+      // Fit eagerly so /pty/resize + the initial snapshot are sized for the
+      // post-switch .term-wrap, not the pre-switch one. Datastar applies the
+      // #canvas patch and the data-sid mutation in the same batch, so by the
+      // time MutationObserver fires here the column layout has already shifted;
+      // reading clientWidth/Height inside fit() forces a sync layout flush.
+      // Without this, narrow->wide tab switches snapshot at the narrow size,
+      // paint into the wide pane, then re-fit ~200ms later (visible flicker).
+      // Cancel the ResizeObserver's pending debounced fit so we don't churn
+      // twice.
+      clearTimeout(rt); rt = null;
+      fit.fit();
       // Force the pty's size to match the browser's term on attach. The
       // initial fit.fit() runs before term.onResize is registered, so the
       // resize-delta guard later never fires for the open-time dimensions.
@@ -440,14 +582,6 @@
       // While the rename modal owns focus, its input handles Enter/Esc/typing
       // itself -- don't pull Alt+R/J/K/etc out from under the user.
       if (document.activeElement?.classList.contains('modal-input')) return;
-      // Enter pressed outside the terminal redirects focus into it -- lets
-      // the user return from sidebar buttons without reaching for the mouse.
-      if (e.key === 'Enter' && !container.contains(document.activeElement)) {
-        e.preventDefault();
-        e.stopPropagation();
-        term.focus();
-        return;
-      }
       const id = readJson('keymap')[comboKey(e)];
       if (!id) return;
       const js = readJson('actions')[id];
