@@ -64,13 +64,25 @@
       const sid = created.sid;
       setStatus(`sid ${sid.slice(0, 8)}`);
 
-      // 2. wire user input -> POST /pty/input
+      // 2. wire user input -> POST /pty/input. Coalesce a 20ms burst into
+      // one POST: each request runs the full nushell-closure dispatch in
+      // http-nu, so collapsing keystroke bursts cuts that cost. Trailing-
+      // edge timer caps added echo latency at 20ms.
+      let inputBuf = '';
+      let inputTimer = null;
       term.onData((data) => {
-        fetch('/pty/input?sid=' + encodeURIComponent(sid), {
-          method: 'POST',
-          headers: { 'content-type': 'application/octet-stream' },
-          body: data,
-        }).catch(() => {});
+        inputBuf += data;
+        if (inputTimer) return;
+        inputTimer = setTimeout(() => {
+          const body = inputBuf;
+          inputBuf = '';
+          inputTimer = null;
+          fetch('/pty/input?sid=' + encodeURIComponent(sid), {
+            method: 'POST',
+            headers: { 'content-type': 'application/octet-stream' },
+            body,
+          }).catch(() => {});
+        }, 20);
       });
 
       // 3. wire resize -> POST /pty/resize.
