@@ -7,7 +7,9 @@
 #   GET  /                  -> static sessions.html shell
 #   GET  /sse?connId=...    -> projected UX state stream (datastar patches)
 #   POST /nav               -> publish selected sid on nav.events bus topic
+#   POST /title             -> set the server-wide window title (signal: title)
 #   POST /pty/create        -> mint a new pty + return sid
+#   POST /pty/new           -> spawn a pty for the calling tab and select it
 #   POST /pty/close?sid=... -> destroy pty
 #   POST /pty/input?sid=... -> raw input bytes to pty stdin
 #   POST /pty/resize?sid=...-> resize pty (cols, rows in JSON body)
@@ -16,6 +18,24 @@
 use http-nu/datastar *
 
 const STATIC = (path self | path dirname | path join "www")
+
+# One title per http-nu instance, shown in every tab's <title>. Stashed in
+# /tmp so it survives SSE reconnects within a server run; cleared on reboot.
+# First read seeds a random adj-noun so the three-tabs-at-three-hosts case
+# starts out distinguishable without any user action.
+const TITLE_FILE = "/tmp/ghostty-web-nu.title"
+const TITLE_ADJ = [calm bold brave bright crisp eager fierce gentle happy keen lucky merry quiet swift wild]
+const TITLE_NOUN = [otter sparrow fox heron stag panda lynx hare badger marten falcon ferret weasel mink]
+
+def load-title []: nothing -> string {
+  if ($TITLE_FILE | path exists) {
+    open --raw $TITLE_FILE | str trim
+  } else {
+    let t = $"($TITLE_ADJ | shuffle | first)-($TITLE_NOUN | shuffle | first)"
+    $t | save -f $TITLE_FILE
+    $t
+  }
+}
 
 # Render the left-pane session list as plain HTML. Returns a string suitable
 # for `to datastar-patch-elements`. Dimensions live in the bottom-right meta
@@ -47,7 +67,8 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
   match [$req.method, $req.path] {
 
     [GET, "/"] => {
-      {datastar_js_path: $DATASTAR_JS_PATH} | .mj ($STATIC | path join "sessions.html")
+      {datastar_js_path: $DATASTAR_JS_PATH, title: (load-title)}
+        | .mj ($STATIC | path join "sessions.html")
     }
 
     [GET, "/sse"] => {
@@ -82,7 +103,10 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
         { .bus sub "pty.events" | each {|e| {kind: "pty", val: $e.value}} }
         { .bus sub "nav.events"
             | where {|e| ($e.value.connId? | default "") == $conn_id}
-            | each {|e| {kind: "nav", val: $e.value}} })
+            | each {|e| {kind: "nav", val: $e.value}} }
+        { .bus sub "title.events"
+            | where {|e| ($e.value.connId? | default "") != $conn_id}
+            | each {|e| {kind: "title", val: $e.value}} })
       | prepend {kind: "init", val: {}}
       | generate {|ev, state|
           let live = (pty list)
@@ -98,6 +122,7 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
             $live | get sid? | get 0? | default ""
           }
           let new_dims = (focused-dims $live $new_sel)
+          let new_title = if $ev.kind == "title" { $ev.val.title } else { $state.title }
           let list_patch = (render-list $live $new_sel
             | to datastar-patch-elements --selector "#sessions-list")
           let need_sel = ($ev.kind == "init") or ($new_sel != $state.sel)
@@ -110,9 +135,17 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
           let dims_patch = if $need_dims {
             ({focusedDims: $new_dims} | to datastar-patch-signals)
           } else { null }
-          let out = ([$sel_patch $dims_patch $list_patch] | where {|x| $x != null})
-          {out: $out, next: {sel: $new_sel, dims: $new_dims}}
-        } {sel: $initial_sid, dims: ""}
+          # $title is the one-per-server window title. title.events is filtered
+          # above so the typer's own connection doesn't get an echo back into
+          # a focused <input>. Init seeds the signal so reconnects pick up the
+          # current /tmp value.
+          let need_title = ($ev.kind == "init") or ($new_title != $state.title)
+          let title_patch = if $need_title {
+            ({title: $new_title} | to datastar-patch-signals)
+          } else { null }
+          let out = ([$sel_patch $dims_patch $title_patch $list_patch] | where {|x| $x != null})
+          {out: $out, next: {sel: $new_sel, dims: $new_dims, title: $new_title}}
+        } {sel: $initial_sid, dims: "", title: (load-title)}
       | flatten
       | to sse
       | metadata set --content-type "text/event-stream"
@@ -140,6 +173,19 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
         pty open $cmd
       }
       {connId: ($signals.connId? | default ""), sid: $sid} | .bus pub "nav.events"
+      null | metadata set { merge {'http.response': {status: 204}} }
+    }
+
+    [POST, "/title"] => {
+      # Set the per-server window title. Persist to /tmp so SSE reconnects in
+      # the same server run see the right value; broadcast via title.events
+      # so other tabs update document.title live. title.events carries the
+      # originating connId; the /sse subscription filters out matches so the
+      # typer doesn't get its own echo clobbering a focused <input>.
+      let signals = $body | from datastar-signals $req
+      let new = ($signals.title? | default "" | str trim)
+      $new | save -f $TITLE_FILE
+      {connId: ($signals.connId? | default ""), title: $new} | .bus pub "title.events"
       null | metadata set { merge {'http.response': {status: 204}} }
     }
 

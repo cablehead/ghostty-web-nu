@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>ghostty-web-nu sessions</title>
+  <title>{{ title or "ghostty-web-nu sessions" }}</title>
   <script type="module" src="{{ datastar_js_path }}"></script>
   <style>
     :root {
@@ -24,37 +24,72 @@
     aside li small { display: block; font-size: 11px; opacity: .6; }
     /* main is a grid: topbar | (terminal + rightbar) | statusbar. The
        three chrome bars frame the terminal on top/right/bottom; the left
-       edge is the sidebar border. */
-    main { display: grid; grid-template-rows: 1ch 1fr auto; min-height: 0; overflow: hidden; }
-    .topbar { background: var(--chrome); }
+       edge is the sidebar border. The topbar shows the current window title
+       (click or Alt+R to rename); the rightbar stays a cosmetic sliver. */
+    main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; overflow: hidden; }
+    .topbar {
+      background: var(--chrome); padding: .15rem .75rem;
+      display: flex; align-items: center;
+      font-size: 11px; color: var(--dim);
+    }
+    .title-display {
+      cursor: pointer; padding: 0 .25rem; border-radius: 2px;
+    }
+    .title-display:hover { background: #2f2f2f; color: var(--fg); }
     .middle { display: grid; grid-template-columns: 1fr 1ch; min-height: 0; }
     .term-wrap { position: relative; min-height: 0; overflow: hidden; }
     #terminal { position: absolute; inset: 0; }
     .rightbar { background: var(--chrome); }
     .statusbar {
       display: flex; justify-content: space-between; align-items: center;
-      padding: .5rem 2.5rem .5rem .75rem;
+      padding: 1rem 2.5rem 1rem .75rem;
       background: var(--chrome); color: var(--fg);
       border-top: 1px solid var(--pane-border);
       font-size: 11px; line-height: 1;
       font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
+    /* Rename modal. Backdrop is a fullscreen translucent overlay; the box
+       floats near the top so it doesn't fight with the user's gaze on the
+       sidebar / terminal. Click outside to cancel; Enter saves; Esc cancels.
+       Pattern adapted from stacks.nu's three-pane rename dialog. */
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0, 0, 0, 0.45);
+      display: flex; align-items: flex-start; justify-content: center;
+      padding-top: 6rem;
+    }
+    .modal-box {
+      width: min(28rem, 90%);
+      background: var(--pane);
+      border: 1px solid var(--pane-border);
+      border-radius: 4px;
+      padding: .75rem 1rem;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+    .modal-input {
+      width: 100%; background: transparent; border: 0; outline: none;
+      color: var(--fg); font: inherit; font-size: 14px;
+      padding: .25rem 0;
+    }
   </style>
 </head>
 <body
-  data-signals="{selectedSid: '', connId: '', sid: '', sel: '', focusedDims: ''}"
+  data-signals='{"selectedSid":"","connId":"","sid":"","sel":"","focusedDims":"","title":{{ title | default("") | tojson | e }},"renaming":false,"draft":""}'
   data-init="@get('/sse')"
+  data-effect="document.title = $title || 'ghostty-web-nu sessions'"
   data-actions='{
-    "new":   "window.app.newSession()",
-    "close": "window.app.closeSelected()",
-    "next":  "window.app.cycle(1)",
-    "prev":  "window.app.cycle(-1)"
+    "new":    "window.app.newSession()",
+    "close":  "window.app.closeSelected()",
+    "next":   "window.app.cycle(1)",
+    "prev":   "window.app.cycle(-1)",
+    "rename": "window.app.openRename()"
   }'
   data-keymap='{
     "alt+n": "new",
     "alt+d": "close",
     "alt+j": "next",
-    "alt+k": "prev"
+    "alt+k": "prev",
+    "alt+r": "rename"
   }'
 >
   <!-- Server overwrites this on every event. The initial placeholder
@@ -62,7 +97,16 @@
   <aside id="sessions-list"><header>Sessions</header></aside>
 
   <main>
-    <div class="topbar"></div>
+    <!-- Topbar shows the current server-wide title. Click (or Alt+R) opens
+         the rename modal; the modal's draft signal stays separate from
+         $title so Esc-to-cancel never disturbs the committed value. -->
+    <div class="topbar">
+      <span
+        class="title-display"
+        title="Rename (Alt+R)"
+        data-text="$title || 'untitled'"
+        data-on:click="$draft = $title; $renaming = true"></span>
+    </div>
     <div class="middle">
       <div class="term-wrap">
         <!-- datastar mirrors $selectedSid into data-sid; our JS observes the
@@ -80,6 +124,24 @@
       <span data-text="$focusedDims"></span>
     </footer>
   </main>
+
+  <!-- Rename modal. data-show toggles visibility via display:none; the input
+       lives in the DOM permanently so a data-effect can re-focus + select-all
+       whenever $renaming flips true. data-bind keeps the input value in
+       $draft (a scratch signal); committing copies $draft -> $title and POSTs
+       /title. Esc or clicking the backdrop cancels without touching $title. -->
+  <div class="modal-backdrop" data-show="$renaming" data-on:click="$renaming = false">
+    <div class="modal-box" data-on:click="evt.stopPropagation()">
+      <input
+        type="text"
+        class="modal-input"
+        spellcheck="false"
+        aria-label="window title"
+        data-bind="draft"
+        data-effect="$renaming && requestAnimationFrame(() => { el.focus(); el.setSelectionRange(0, el.value.length); })"
+        data-on:keydown="if (evt.key === 'Enter') { $title = $draft; $renaming = false; @post('/title') } else if (evt.key === 'Escape') { $renaming = false }">
+    </div>
+  </div>
 
   <script type="module">
     import { init, Terminal, FitAddon } from './ghostty-web.js';
@@ -210,6 +272,14 @@
         const next = items[((idx < 0 ? 0 : idx) + dir + items.length) % items.length];
         next.querySelector('button')?.click();
       },
+      openRename() {
+        // Action handlers are raw JS strings (new Function), so they can't
+        // touch datastar signals directly. Re-fire a click on the topbar's
+        // title-display, whose data-on:click expression seeds $draft from
+        // $title and flips $renaming -- letting datastar own the signal
+        // mutation path.
+        document.querySelector('.title-display')?.click();
+      },
     };
 
     // Combo normalization. macOS substitutes a unicode glyph for e.key when
@@ -239,6 +309,9 @@
     }
     // Capture-phase so we beat ghostty-web's canvas handler to the chord.
     document.addEventListener('keydown', (e) => {
+      // While the rename modal owns focus, its input handles Enter/Esc/typing
+      // itself -- don't pull Alt+R/J/K/etc out from under the user.
+      if (document.activeElement?.classList.contains('modal-input')) return;
       const id = readJson('keymap')[comboKey(e)];
       if (!id) return;
       const js = readJson('actions')[id];
