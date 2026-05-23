@@ -9,7 +9,7 @@ stands in for the browser terminal -- tracking screen + scrollback so a
 reattach replays clean, and answering VT queries from the pty when no
 client is attached.
 
-https://github.com/user-attachments/assets/a87f9bc1-2005-412d-bfa7-831e888fd4ab
+<img width="1509" height="986" alt="image" src="https://github.com/user-attachments/assets/7d37d200-e78c-4f9a-ba2e-8296f6c838d1" />
 
 ## Run
 
