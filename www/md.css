@@ -1,0 +1,149 @@
+/* md.css -- styles for http-nu .md output landing inside .canvas-content.
+   Reads from stellar.css design tokens (loaded by sessions.html / index.html).
+   Mirrors the article rules in ~/shapes/serve.nu but rescoped. */
+
+.canvas-content {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-0);
+  line-height: var(--font-line-height-2);
+  color: var(--neutral-1-on);
+  padding: var(--size-1) var(--size-2);
+  max-width: 72ch;
+}
+
+.canvas-content > :first-child { margin-top: 0; }
+.canvas-content > :last-child { margin-bottom: 0; }
+
+.canvas-content h1,
+.canvas-content h2,
+.canvas-content h3,
+.canvas-content h4,
+.canvas-content h5,
+.canvas-content h6 {
+  color: var(--neutral-1-on);
+  font-weight: var(--font-weight-bold);
+}
+.canvas-content h1 { font-size: var(--font-size-5); margin: var(--size-3) 0 var(--size-1); }
+.canvas-content h2 {
+  font-size: var(--font-size-3);
+  font-weight: var(--font-weight-semi-bold);
+  border-bottom: var(--border-width-1) solid var(--neutral-4);
+  padding-bottom: var(--size--2);
+  margin: var(--size-3) 0 var(--size-1);
+}
+.canvas-content h3 { font-size: var(--font-size-2); font-weight: var(--font-weight-semi-bold); margin: var(--size-2) 0 var(--size-0); }
+.canvas-content h4 { font-size: var(--font-size-1); font-weight: var(--font-weight-semi-bold); margin: var(--size-1) 0 var(--size-0); }
+.canvas-content h5 { font-size: var(--font-size-0); font-weight: var(--font-weight-semi-bold); margin: var(--size-1) 0 var(--size-0); }
+.canvas-content h6 { font-size: var(--font-size--1); font-weight: var(--font-weight-semi-bold); color: var(--neutral-1-dim); margin: var(--size-1) 0 var(--size-0); }
+
+.canvas-content p { line-height: var(--font-line-height-2); margin: var(--size-0) 0; }
+
+.canvas-content a { color: var(--neutral-1-on); text-decoration: underline; text-underline-offset: 2px; }
+.canvas-content a:hover { color: var(--neutral-1-dim); }
+
+.canvas-content strong { font-weight: var(--font-weight-bold); }
+.canvas-content em { font-style: italic; }
+.canvas-content del { text-decoration: line-through; opacity: .7; }
+
+.canvas-content code {
+  font-family: var(--font-mono);
+  background: var(--code-inner-bg);
+  color: var(--code-fg);
+  padding: 0.1em 0.3em 0.2em;
+  border-radius: var(--border-radius--2);
+  font-size: 0.92em;
+}
+
+.canvas-content pre {
+  background: var(--code-bg);
+  color: var(--code-fg);
+  padding: var(--size--1);
+  border-radius: var(--border-radius--1);
+  overflow-x: auto;
+  margin: var(--size-1) 0;
+  line-height: var(--font-line-height-1);
+  border: 1px solid var(--code-border);
+}
+.canvas-content pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  border-radius: 0;
+}
+
+.canvas-content ul,
+.canvas-content ol {
+  margin: var(--size-0) 0;
+  padding-left: var(--size-3);
+  line-height: var(--font-line-height-2);
+}
+.canvas-content li { margin: var(--size--2) 0; }
+.canvas-content li > ul,
+.canvas-content li > ol { margin: var(--size--2) 0; }
+
+.canvas-content blockquote {
+  border-left: var(--border-width-3) solid var(--neutral-4);
+  padding-left: var(--size-2);
+  color: var(--neutral-1-dim);
+  margin: var(--size-1) 0;
+  font-style: italic;
+}
+
+.canvas-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--size-1) 0;
+}
+.canvas-content th {
+  background: var(--neutral-3);
+  color: var(--neutral-3-on);
+  font-weight: var(--font-weight-semi-bold);
+  text-align: left;
+}
+.canvas-content td,
+.canvas-content th {
+  padding: var(--size-0) var(--size-1);
+  border: var(--border-width-1) solid var(--neutral-4);
+}
+
+.canvas-content hr {
+  border: none;
+  border-top: var(--border-width-1) solid var(--neutral-4);
+  margin: var(--size-2) 0;
+}
+
+.canvas-content img { max-width: 100%; border-radius: var(--border-radius-2); }
+
+/* TextMate scope highlighting from .highlight. Spans carry space-separated
+   scope classes (e.g. "entity name function rust"); the dotted selectors
+   target an element bearing all named classes. Mirrors shapes/serve.nu. */
+.canvas-content pre code.source { color: var(--code-fg); }
+.canvas-content pre .source { color: var(--code-fg); }
+.canvas-content pre .comment { color: var(--code-comment); }
+.canvas-content pre .string { color: var(--code-string); }
+.canvas-content pre .constant.numeric { color: var(--code-number); }
+.canvas-content pre .constant.language { color: var(--code-keyword-const); }
+.canvas-content pre .constant.character { color: var(--code-string-escape); }
+.canvas-content pre .keyword { color: var(--code-keyword); }
+.canvas-content pre .keyword.operator { color: var(--code-operator); }
+.canvas-content pre .storage,
+.canvas-content pre .storage.type { color: var(--code-keyword-decl); }
+.canvas-content pre .entity.name.function { color: var(--code-name-function); }
+.canvas-content pre .entity.name.type,
+.canvas-content pre .entity.name.class { color: var(--code-name-class); }
+.canvas-content pre .entity.name.tag { color: var(--code-name-tag); }
+.canvas-content pre .entity.other.attribute-name { color: var(--code-name-attribute); }
+.canvas-content pre .variable { color: var(--code-name-variable); }
+.canvas-content pre .variable.other.member { color: var(--code-name-property); }
+.canvas-content pre .variable.parameter.option { color: var(--code-name-label); }
+.canvas-content pre .support.function { color: var(--code-name-builtin); }
+.canvas-content pre .support.function.keywords { color: var(--code-keyword-namespace); }
+.canvas-content pre .support.type,
+.canvas-content pre .support.class { color: var(--code-type); }
+.canvas-content pre .support.macro { color: var(--code-name-function); }
+.canvas-content pre .punctuation { color: var(--code-fg); }
+.canvas-content pre .punctuation.definition.string { color: var(--code-string-delim); }
+.canvas-content pre .punctuation.definition.comment { color: var(--code-comment); }
+.canvas-content pre .meta.function-call { color: var(--code-name); }
+.canvas-content pre .meta.string { color: var(--code-string); }

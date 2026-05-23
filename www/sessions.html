@@ -1,13 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="utf-8">
   <title>{{ title or "ghostty-web-nu sessions" }}</title>
   <script type="module" src="{{ datastar_js_path }}"></script>
   <script src="https://cdn.jsdelivr.net/npm/iconify-icon@2/dist/iconify-icon.min.js"></script>
+  <link rel="stylesheet" href="/stellar.css">
+  <link rel="stylesheet" href="/md.css">
   <style>
     :root {
-      --bg: #1e1e1e; --fg: #d4d4d4;
+      --bg: #1d0e2e; --fg: #d4d4d4;
       --pane: #161616; --pane-border: #2a2a2a;
       --sel: #2a9d4a; --sel-blur: #2d4f7c; --sel-fg: #ffffff; --dim: #888;
       --chrome: #252525;
@@ -273,7 +275,7 @@
       cursorBlink: true,
       fontSize: 14,
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-      theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+      theme: { background: '#1d0e2e', foreground: '#d4d4d4' },
       scrollback: {{ scrollback_lines }},
     });
     const fit = new FitAddon();
