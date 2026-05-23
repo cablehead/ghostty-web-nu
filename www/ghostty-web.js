@@ -1385,8 +1385,8 @@ class $ {
    * Resize canvas to fit terminal dimensions
    */
   resize(A, B) {
-    const g = A * this.metrics.width, E = B * this.metrics.height;
-    this.canvas.style.width = `${g}px`, this.canvas.style.height = `${E}px`, this.canvas.width = g * this.devicePixelRatio, this.canvas.height = E * this.devicePixelRatio, this.ctx.scale(this.devicePixelRatio, this.devicePixelRatio), this.ctx.textBaseline = "alphabetic", this.ctx.textAlign = "left", this.ctx.fillStyle = this.theme.background, this.ctx.fillRect(0, 0, g, E);
+    const g = A * this.metrics.width, E = B * this.metrics.height, gw = g + SCROLLBAR_GUTTER;
+    this.canvas.style.width = `${gw}px`, this.canvas.style.height = `${E}px`, this.canvas.width = gw * this.devicePixelRatio, this.canvas.height = E * this.devicePixelRatio, this.ctx.scale(this.devicePixelRatio, this.devicePixelRatio), this.ctx.textBaseline = "alphabetic", this.ctx.textAlign = "left", this.ctx.fillStyle = this.theme.background, this.ctx.fillRect(0, 0, gw, E);
   }
   // ==========================================================================
   // Main Rendering
@@ -1398,7 +1398,7 @@ class $ {
     var U;
     this.currentBuffer = A;
     const I = A.getCursor(), D = A.getDimensions(), i = E ? E.getScrollbackLength() : 0;
-    (U = A.needsFullRedraw) != null && U.call(A) && (B = !0), (this.canvas.width !== D.cols * this.metrics.width * this.devicePixelRatio || this.canvas.height !== D.rows * this.metrics.height * this.devicePixelRatio) && (this.resize(D.cols, D.rows), B = !0), g !== this.lastViewportY && (B = !0, this.lastViewportY = g);
+    (U = A.needsFullRedraw) != null && U.call(A) && (B = !0), (this.canvas.width !== (D.cols * this.metrics.width + SCROLLBAR_GUTTER) * this.devicePixelRatio || this.canvas.height !== D.rows * this.metrics.height * this.devicePixelRatio) && (this.resize(D.cols, D.rows), B = !0), g !== this.lastViewportY && (B = !0, this.lastViewportY = g);
     const s = I.x !== this.lastCursorPosition.x || I.y !== this.lastCursorPosition.y;
     if (s || this.cursorBlink) {
       if (!B && !A.isRowDirty(I.y)) {
@@ -2256,7 +2256,7 @@ class IA {
       return;
     this.selectionManager && this.selectionManager.clearSelection(), this.renderer.resize(this.cols, this.rows);
     const A = this.renderer.getMetrics();
-    this.canvas.width = A.width * this.cols, this.canvas.height = A.height * this.rows, this.canvas.style.width = `${A.width * this.cols}px`, this.canvas.style.height = `${A.height * this.rows}px`, this.renderer.render(this.wasmTerm, !0, this.viewportY, this);
+    this.canvas.width = A.width * this.cols + SCROLLBAR_GUTTER, this.canvas.height = A.height * this.rows, this.canvas.style.width = `${A.width * this.cols + SCROLLBAR_GUTTER}px`, this.canvas.style.height = `${A.height * this.rows}px`, this.renderer.render(this.wasmTerm, !0, this.viewportY, this);
   }
   /**
    * Parse a CSS color string to 0xRRGGBB format.
@@ -2424,7 +2424,7 @@ class IA {
       return;
     this.cols = A, this.rows = B, this.wasmTerm.resize(A, B), this.renderer.resize(A, B);
     const g = this.renderer.getMetrics();
-    this.canvas.width = g.width * A, this.canvas.height = g.height * B, this.canvas.style.width = `${g.width * A}px`, this.canvas.style.height = `${g.height * B}px`, this.resizeEmitter.fire({ cols: A, rows: B }), this.renderer.render(this.wasmTerm, !0, this.viewportY, this);
+    this.canvas.width = g.width * A + SCROLLBAR_GUTTER, this.canvas.height = g.height * B, this.canvas.style.width = `${g.width * A + SCROLLBAR_GUTTER}px`, this.canvas.style.height = `${g.height * B}px`, this.resizeEmitter.fire({ cols: A, rows: B }), this.renderer.render(this.wasmTerm, !0, this.viewportY, this);
   }
   /**
    * Clear terminal screen
@@ -2835,6 +2835,12 @@ class IA {
   }
 }
 const QA = 2, BA = 1, gA = 15, EA = 100;
+// ghostty-web-nu local customization (see www/VENDORED.md "Local patches"):
+// extra canvas width past the cell grid so the vertical scrollbar -- which
+// upstream draws at canvas.width - 12 -- lands in dedicated space instead of
+// overlapping the rightmost columns. Cell rendering uses cols*cellWidth, so
+// the extra pixels are simply background.
+const SCROLLBAR_GUTTER = 15;
 class DA {
   constructor() {
     this._isResizing = !1;
