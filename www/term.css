@@ -13,6 +13,10 @@
 :root {
   --term-bg: #1e1e1e;
   --term-fg: #d4d4d4;
+  /* Integer pixel row height so a whole number of rows tiles the scroll
+     container exactly -- a fractional (em-based) line-height leaves a
+     sub-pixel sliver clipped at the top when scrolled to the bottom. */
+  --cell-h: 17px;
 }
 
 html, body {
@@ -27,6 +31,9 @@ body {
   font-family: 'Inconsolata', Monaco, Menlo, 'Courier New', monospace;
   font-size: 14px;
   overflow: hidden;
+  /* Dynamic viewport height so Safari's collapsing toolbar/tab chrome
+     doesn't leave the grid sized to an area that's partly behind it. */
+  height: 100dvh;
 }
 
 #status {
@@ -39,21 +46,34 @@ body {
   z-index: 10;
 }
 
-#grid {
+/* #screen is the scroll container. The server morphs #grid (its only
+ * child) on every frame, so any inline style on #grid would be wiped by
+ * the morph -- the row-aligned height lives here instead, where Datastar
+ * never touches it. */
+#screen {
   position: absolute;
-  inset: 0;
-  font-family: inherit;
-  font-size: inherit;
-  line-height: 1.2;
-  white-space: pre;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* Height is set in JS to a whole multiple of the row height so a
+     bottom-anchored scroll never leaves a half-row clipped at the top.
+     Falls back to full height before the first measurement. */
+  height: 100dvh;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
 }
 
+#grid {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: var(--cell-h);
+  white-space: pre;
+}
+
 .row {
   display: block;
-  height: 1.2em;
+  height: var(--cell-h);
 }
 
 .cell-probe {
@@ -63,7 +83,7 @@ body {
   left: -9999px;
   font-family: inherit;
   font-size: inherit;
-  line-height: 1.2;
+  line-height: var(--cell-h);
   white-space: pre;
 }
 

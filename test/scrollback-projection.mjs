@@ -36,12 +36,12 @@ await new Promise((r) => setTimeout(r, 300));
 
 async function probe(label) {
   const i = await page.evaluate(() => {
-    const g = document.getElementById("grid");
+    const g = document.getElementById("screen"); const gr = document.getElementById("grid");
     const status = document.getElementById("status");
     return {
-      dims: `${g.dataset.cols}x${g.dataset.rows}`,
-      total: g.dataset.total,
-      rowsRendered: g.querySelectorAll(".row").length,
+      dims: `${gr.dataset.cols}x${gr.dataset.rows}`,
+      total: gr.dataset.total,
+      rowsRendered: gr.querySelectorAll(".row").length,
       scrollTop: Math.round(g.scrollTop),
       scrollHeight: Math.round(g.scrollHeight),
       clientHeight: Math.round(g.clientHeight),
@@ -72,7 +72,7 @@ await probe("after 60 lines of output (should auto-scroll to bottom)");
 
 console.log("\n--- scroll up by 200px ---");
 await page.evaluate(() => {
-  const g = document.getElementById("grid");
+  const g = document.getElementById("screen"); const gr = document.getElementById("grid");
   g.scrollTop = Math.max(0, g.scrollTop - 200);
 });
 await new Promise((r) => setTimeout(r, 100));
@@ -91,7 +91,7 @@ await probe("after output while scrolled up (gap should grow, stickToBottom=fals
 
 console.log("\n--- scroll back to bottom manually ---");
 await page.evaluate(() => {
-  const g = document.getElementById("grid");
+  const g = document.getElementById("screen"); const gr = document.getElementById("grid");
   g.scrollTop = g.scrollHeight;
 });
 await new Promise((r) => setTimeout(r, 200));

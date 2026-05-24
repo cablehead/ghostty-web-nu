@@ -14,7 +14,7 @@
   data-effect="$sid && @get('/pty/view?sid=' + $sid, {openWhenHidden: true})"
 >
   <div id="status">connecting...</div>
-  <div id="grid"></div>
+  <div id="screen"><div id="grid"></div></div>
   <key-buffer data-attr:sid="$sid"></key-buffer>
 
   <script type="module">
@@ -33,6 +33,10 @@
       return { w: rect.width / 80, h: rect.height };
     }
 
+    const status = document.getElementById('status');
+    const grid = document.getElementById('grid');
+    const screen = document.getElementById('screen');
+
     function viewportCells(cell) {
       return {
         cols: Math.max(20, Math.floor(window.innerWidth / cell.w)),
@@ -40,8 +44,15 @@
       };
     }
 
-    const status = document.getElementById('status');
-    const grid = document.getElementById('grid');
+    // Pin the scroll container to a whole number of rows tall. If the
+    // viewport height isn't an exact multiple of the row height, the
+    // leftover sub-row gap sits below the container (filled by the body
+    // background) rather than clipping a half-row at the top when scrolled
+    // to the bottom. Lives on #screen, not #grid, because the server morphs
+    // #grid every frame and would strip an inline style off it.
+    function applyGridHeight(cell, rows) {
+      screen.style.height = Math.round(rows * cell.h) + 'px';
+    }
 
     // Live status: reads dims off the grid itself. Updates whenever the
     // server emits a new frame whose data-cols/data-rows differ from the
@@ -88,22 +99,23 @@
     // flag is reliably consumed before any user scroll could arrive.
     let stickToBottom = true;
     let suppressNextScroll = false;
-    grid.addEventListener('scroll', () => {
+    screen.addEventListener('scroll', () => {
       if (suppressNextScroll) {
         suppressNextScroll = false;
         return;
       }
-      stickToBottom = grid.scrollHeight - grid.scrollTop - grid.clientHeight < 8;
+      stickToBottom = screen.scrollHeight - screen.scrollTop - screen.clientHeight < 8;
     });
     new MutationObserver(() => {
-      if (stickToBottom && grid.scrollTop !== grid.scrollHeight - grid.clientHeight) {
+      if (stickToBottom && screen.scrollTop !== screen.scrollHeight - screen.clientHeight) {
         suppressNextScroll = true;
-        grid.scrollTop = grid.scrollHeight;
+        screen.scrollTop = screen.scrollHeight;
       }
     }).observe(grid, { childList: true, subtree: true, characterData: true });
 
     let cell = measureCell();
     const initial = viewportCells(cell);
+    applyGridHeight(cell, initial.rows);
 
     // Reattach to the prior sid on refresh. sessionStorage scopes to this
     // tab, so a refresh hits the same pty while a new tab gets its own.
@@ -156,6 +168,7 @@
       resizeTimer = setTimeout(async () => {
         cell = measureCell();
         const { cols, rows } = viewportCells(cell);
+        applyGridHeight(cell, rows);
         const key = `${cols}x${rows}`;
         if (key === lastSent) return;
         lastSent = key;
