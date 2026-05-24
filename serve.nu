@@ -1,10 +1,15 @@
-# ghostty-web-nu: ghostty-web frontend wired to http-nu's `pty` commands.
+# ghostty-web-nu: server-rendered terminal projection.
+#
+# The browser is not a VT emulator. It renders an HTML cell grid whose
+# state is held server-side by wezterm-term (in http-nu's pty subsystem).
+# Keystrokes POST to /pty/input; the server advances the terminal and the
+# new screen is morphed into the client via Datastar SSE patches.
 #
 # Run:
-#   http-nu :3001 ~/ghostty-web-nu/serve.nu
+#   http-nu :5002 ~/ghostty-web-nu/serve.nu --watch
 #
 # Override the spawned program with GHOSTTY_WEB_NU_CMD, e.g.
-#   GHOSTTY_WEB_NU_CMD=claude http-nu :3001 ~/ghostty-web-nu/serve.nu
+#   GHOSTTY_WEB_NU_CMD=bash http-nu :5002 ~/ghostty-web-nu/serve.nu
 
 const STATIC = (path self | path dirname | path join "www")
 
@@ -23,6 +28,10 @@ const STATIC = (path self | path dirname | path join "www")
       {sid: $sid}
     }
 
+    # Belt-and-braces: http-nu's Rust fast-path handles POST /pty/input
+    # before the closure ever runs. This arm only matches if the fast-path
+    # is disabled or bypassed; leaving it here keeps `serve.nu` self-
+    # describing.
     [POST, "/pty/input"] => {
       $body | pty write $req.query.sid
       null | metadata set { merge {'http.response': {status: 204}} }
@@ -34,9 +43,18 @@ const STATIC = (path self | path dirname | path join "www")
       null | metadata set { merge {'http.response': {status: 204}} }
     }
 
-    [GET, "/pty/stream"] => {
-      pty stream $req.query.sid --sse
+    [GET, "/pty/view"] => {
+      pty view $req.query.sid
       | metadata set --content-type "text/event-stream"
+    }
+
+    [POST, "/pty/close"] => {
+      pty close $req.query.sid
+      null | metadata set { merge {'http.response': {status: 204}} }
+    }
+
+    [GET, "/favicon.ico"] => {
+      null | metadata set { merge {'http.response': {status: 204}} }
     }
 
     _ => {

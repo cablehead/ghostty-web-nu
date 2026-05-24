@@ -4,109 +4,161 @@
   <meta charset="utf-8">
   <title>ghostty-web-nu</title>
   <link rel="stylesheet" href="/stellar.css">
-  <link rel="stylesheet" href="/md.css">
-  <style>
-    html, body { margin: 0; padding: 0; height: 100%; background: #1e1e1e; color: #d4d4d4; font-family: monospace; }
-    #status { position: fixed; top: 6px; right: 8px; font-size: 12px; opacity: 0.7; }
-    #terminal { position: absolute; inset: 0; }
-  </style>
+  <link rel="stylesheet" href="/term.css">
+  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"></script>
+  <script type="module" src="/key-buffer.js"></script>
 </head>
-<body>
+<body
+  data-signals="{sid: ''}"
+  data-on:sid-ready__window="$sid = evt.detail.sid"
+  data-effect="$sid && @get('/pty/view?sid=' + $sid, {openWhenHidden: true})"
+>
   <div id="status">connecting...</div>
-  <div id="terminal"></div>
+  <div id="grid"></div>
+  <key-buffer data-attr:sid="$sid"></key-buffer>
 
   <script type="module">
-    import { init, Terminal, FitAddon } from './ghostty-web.js';
+    // Wait for the @font-face Inconsolata to actually arrive before probing
+    // the cell. Otherwise we measure the fallback (Monaco) and the server
+    // gets cols/rows that don't match what fits.
+    await document.fonts.ready;
 
-    const $status = document.getElementById('status');
-    const setStatus = (s) => { $status.textContent = s; };
-
-    function b64ToBytes(b64) {
-      const bin = atob(b64);
-      const out = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-      return out;
+    function measureCell() {
+      const probe = document.createElement('span');
+      probe.className = 'cell-probe';
+      probe.textContent = 'M'.repeat(80);
+      document.body.appendChild(probe);
+      const rect = probe.getBoundingClientRect();
+      probe.remove();
+      return { w: rect.width / 80, h: rect.height };
     }
 
-    async function main() {
-      await init();
+    function viewportCells(cell) {
+      return {
+        cols: Math.max(20, Math.floor(window.innerWidth / cell.w)),
+        rows: Math.max(5, Math.floor(window.innerHeight / cell.h)),
+      };
+    }
 
-      const term = new Terminal({
-        cursorBlink: true,
-        fontSize: 14,
-        fontFamily: 'Monaco, Menlo, "Courier New", monospace',
-        theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
-        scrollback: 10000,
-      });
+    const status = document.getElementById('status');
+    const grid = document.getElementById('grid');
 
-      const fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(document.getElementById('terminal'));
-      // Defer fit() past first paint so clientWidth/Height are non-zero,
-      // otherwise the FitAddon measures an empty box and we get a tiny font.
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      fit.fit();
-
-      // fit.observeResize() would fire per-frame during a window drag, and
-      // each fit() synchronously reallocates the WASM buffer + canvas. The
-      // storm freezes the browser tab. Hard debounce instead.
-      let resizeTimer = null;
-      window.addEventListener('resize', () => {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => fit.fit(), 200);
-      });
-
-      // 1. create session at current size
-      setStatus('creating pty...');
-      const created = await fetch('/pty/create', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cols: term.cols, rows: term.rows }),
-      }).then((r) => r.json());
-      const sid = created.sid;
-      setStatus(`sid ${sid.slice(0, 8)}`);
-
-      // 2. wire user input -> POST /pty/input. Two strategies kept side-
-      // by-side so we can A/B the feel; default is direct (one POST per
-      // keystroke) now that the Rust fast-path makes /pty/input ~0ms
-      // server-side. Swap term.onData below to feel-test coalescing.
-      let inputBuf = '';
-      let inputTimer = null;
-      function sendInputCoalesced(data) {
-        inputBuf += data;
-        if (inputTimer) return;
-        inputTimer = setTimeout(() => {
-          const body = inputBuf;
-          inputBuf = '';
-          inputTimer = null;
-          fetch('/pty/input?sid=' + encodeURIComponent(sid), {
-            method: 'POST',
-            headers: { 'content-type': 'application/octet-stream' },
-            body,
-          }).catch(() => {});
-        }, 20);
+    // Live status: reads dims off the grid itself. Updates whenever the
+    // server emits a new frame whose data-cols/data-rows differ from the
+    // last one. This is what the user sees during a resize -- the moment
+    // the server acks the new size, the status text changes.
+    let lastDims = '';
+    function syncStatus() {
+      const c = grid.dataset.cols || '?';
+      const r = grid.dataset.rows || '?';
+      const dims = `${c}x${r}`;
+      if (dims !== lastDims) {
+        lastDims = dims;
+        const sidPart = window.__sid ? window.__sid.slice(0, 8) : '';
+        status.textContent = sidPart ? `sid ${sidPart} (${dims})` : `(${dims})`;
       }
-      function sendInputDirect(data) {
-        fetch('/pty/input?sid=' + encodeURIComponent(sid), {
+    }
+    new MutationObserver(syncStatus).observe(grid, {
+      attributes: true,
+      attributeFilter: ['data-cols', 'data-rows'],
+    });
+
+    // Mirror the pty's OSC 0/2 title into document.title. Empty string means
+    // nothing's set; fall back to the page's default in that case.
+    const defaultTitle = document.title;
+    function syncTitle() {
+      const t = grid.dataset.title || '';
+      const next = t ? t : defaultTitle;
+      if (document.title !== next) document.title = next;
+    }
+    new MutationObserver(syncTitle).observe(grid, {
+      attributes: true,
+      attributeFilter: ['data-title'],
+    });
+
+    // Auto-stick-to-bottom: when the user is at (or near) the bottom of the
+    // scrollback and a new frame morphs in, snap to the bottom so the live
+    // tail stays visible. When they've scrolled up, leave the position alone
+    // -- new output accumulates below the visible viewport until they
+    // scroll back to the bottom.
+    //
+    // Distinguishing "user scrolled" from "we scrolled" is done with a
+    // suppression flag set immediately before the programmatic scrollTop
+    // write. The scroll event fires synchronously from that write, so the
+    // flag is reliably consumed before any user scroll could arrive.
+    let stickToBottom = true;
+    let suppressNextScroll = false;
+    grid.addEventListener('scroll', () => {
+      if (suppressNextScroll) {
+        suppressNextScroll = false;
+        return;
+      }
+      stickToBottom = grid.scrollHeight - grid.scrollTop - grid.clientHeight < 8;
+    });
+    new MutationObserver(() => {
+      if (stickToBottom && grid.scrollTop !== grid.scrollHeight - grid.clientHeight) {
+        suppressNextScroll = true;
+        grid.scrollTop = grid.scrollHeight;
+      }
+    }).observe(grid, { childList: true, subtree: true, characterData: true });
+
+    let cell = measureCell();
+    const initial = viewportCells(cell);
+
+    // Reattach to the prior sid on refresh. sessionStorage scopes to this
+    // tab, so a refresh hits the same pty while a new tab gets its own.
+    // The probe is POST /pty/resize -- a 204 means the sid is alive AND
+    // the dims are updated to the current viewport in one round trip; any
+    // other status (404/500 from the server when the sid is unknown) means
+    // we need to mint a fresh one.
+    let sid = sessionStorage.getItem('sid');
+    let reattached = false;
+    if (sid) {
+      status.textContent = `reattaching ${sid.slice(0, 8)}...`;
+      try {
+        const r = await fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
           method: 'POST',
-          headers: { 'content-type': 'application/octet-stream' },
-          body: data,
-        }).catch(() => {});
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(initial),
+        });
+        reattached = r.status === 204;
+      } catch {}
+      if (!reattached) {
+        sessionStorage.removeItem('sid');
+        sid = null;
       }
-      term.onData((data) => {
-        sendInputDirect(data);
-      });
+    }
+    if (!sid) {
+      status.textContent = `requesting ${initial.cols}x${initial.rows}...`;
+      try {
+        const r = await fetch('/pty/create', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(initial),
+        });
+        ({ sid } = await r.json());
+        sessionStorage.setItem('sid', sid);
+      } catch (e) {
+        status.textContent = 'pty/create failed: ' + e.message;
+        throw e;
+      }
+    }
+    window.__sid = sid;
+    syncStatus();
+    window.dispatchEvent(new CustomEvent('sid-ready', { detail: { sid } }));
 
-      // 3. wire resize -> POST /pty/resize.
-      // Each resize triggers a blocking cursor::position() roundtrip inside
-      // reedline (\x1b[6n -> \x1b[r;cR). During a drag the FitAddon fires
-      // observer events constantly -- coalesce them: ignore no-op size
-      // changes, and serialize fetches so at most one is in flight.
-      let lastCols = term.cols;
-      let lastRows = term.rows;
-      let inflight = null;
-      let pending = null;
-      const sendResize = async ({ cols, rows }) => {
+    // Re-measure on every resize -- catches browser zoom changes and any
+    // font-metric oddities that show up at different viewport sizes.
+    let resizeTimer;
+    let lastSent = `${initial.cols}x${initial.rows}`;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(async () => {
+        cell = measureCell();
+        const { cols, rows } = viewportCells(cell);
+        const key = `${cols}x${rows}`;
+        if (key === lastSent) return;
+        lastSent = key;
         try {
           await fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
             method: 'POST',
@@ -114,34 +166,7 @@
             body: JSON.stringify({ cols, rows }),
           });
         } catch {}
-      };
-      const drain = async () => {
-        while (pending) {
-          const next = pending;
-          pending = null;
-          inflight = sendResize(next);
-          await inflight;
-        }
-        inflight = null;
-      };
-      term.onResize(({ cols, rows }) => {
-        if (cols === lastCols && rows === lastRows) return;
-        lastCols = cols;
-        lastRows = rows;
-        pending = { cols, rows };
-        if (!inflight) drain();
-      });
-
-      // 4. open SSE for output
-      const es = new EventSource('/pty/stream?sid=' + encodeURIComponent(sid));
-      es.onopen = () => setStatus(`sid ${sid.slice(0, 8)} (live)`);
-      es.onerror = () => setStatus(`sid ${sid.slice(0, 8)} (disconnected)`);
-      es.onmessage = (ev) => term.write(b64ToBytes(ev.data));
-    }
-
-    main().catch((e) => {
-      console.error(e);
-      setStatus('error: ' + e.message);
+      }, 80);
     });
   </script>
 </body>
