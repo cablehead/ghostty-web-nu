@@ -49,7 +49,13 @@
     /* .term-wrap is the positioned ancestor that grid.css's #screen fills
        (position:absolute; inset). It carries the terminal background so the
        sub-row remainder below the row-aligned #screen blends in. */
-    .term-wrap { position: relative; min-height: 0; overflow: hidden; background: var(--term-bg); }
+    .term-wrap { position: relative; min-height: 0; overflow: hidden; background: var(--term-bg); transition: opacity .12s; }
+    /* Navigate mode dims the terminal to signal it's read-only; focus mode
+       (Enter on the terminal) restores it and routes keys to the pty. */
+    body.mode-navigate .term-wrap { opacity: .5; }
+    body.mode-focus .term-wrap { opacity: 1; }
+    .mode-badge { margin-left: auto; font-size: 11px; color: var(--dim); letter-spacing: .04em; text-transform: uppercase; }
+    body.mode-focus .mode-badge { color: var(--sel); }
     .rightbar { background: var(--chrome); }
     .statusbar {
       display: flex; justify-content: space-between; align-items: center;
@@ -117,9 +123,11 @@
     "next":      "window.app.cycle(1)",
     "prev":      "window.app.cycle(-1)",
     "rename":    "window.app.openRename()",
-    "renameTab": "window.app.openRenameTab()"
+    "renameTab": "window.app.openRenameTab()",
+    "focus":     "window.app.focus()"
   }'
   data-keymap='{
+    "enter": "focus",
     "alt+t": "new",
     "alt+d": "close",
     "alt+j": "next",
@@ -138,6 +146,7 @@
         title="Rename (Alt+Shift+R)"
         data-text="$title || 'untitled'"
         data-on:click="$draft = $title; $renameMode = 'title'; $renaming = true"></span>
+      <span class="mode-badge" id="mode-badge">navigate</span>
     </div>
     <div class="middle">
       <div class="term-wrap">
@@ -296,7 +305,34 @@
         trig.dataset.label = label;
         trig.click();
       },
+      focus() {
+        // Enter the focused terminal only if one is selected.
+        if (screen.dataset.sid) setMode('focus');
+      },
     };
+
+    // Modal interaction: navigate vs focus. In navigate mode the terminal is
+    // greyed and key-buffer is off, so the full keymap (Alt+T/D/J/K/R, Enter)
+    // is live and nothing leaks to the pty. Enter focuses the selected
+    // terminal -> key-buffer on, keys route to the pty, and only Alt+Esc
+    // (not plain Esc, which TUIs need) returns to navigate.
+    const keybuf = document.querySelector('key-buffer');
+    const badge = document.getElementById('mode-badge');
+    let mode = 'navigate';
+    function setMode(m) {
+      mode = m;
+      document.body.classList.toggle('mode-focus', m === 'focus');
+      document.body.classList.toggle('mode-navigate', m === 'navigate');
+      keybuf.setAttribute('enabled', m === 'focus' ? 'true' : 'false');
+      badge.textContent = m;
+    }
+    setMode('navigate');
+
+    // A session that goes away (close, or the selection moving off it) drops
+    // focus back to navigate so keystrokes can't land on a dead sid.
+    new MutationObserver(() => {
+      if (mode === 'focus' && !screen.dataset.sid) setMode('navigate');
+    }).observe(screen, { attributes: true, attributeFilter: ['data-sid'] });
 
     // Combo normalization. macOS substitutes a glyph for e.key when Alt is
     // held (option+d -> the partial-derivative sign); fall back to e.code
@@ -323,13 +359,25 @@
       if (!raw) return {};
       try { return JSON.parse(raw); } catch { return {}; }
     }
-    // Capture-phase: a matched app combo calls stopPropagation, so it never
-    // reaches key-buffer's window (bubble-phase) keydown listener -- that's
-    // how Alt+T means "new session" instead of ESC+t to the pty. Bail while
-    // the rename modal owns focus so its input keeps Enter/Esc/typing.
+    // Capture-phase keymap. A matched combo calls stopPropagation so it never
+    // reaches key-buffer's window (bubble-phase) listener. The active set of
+    // combos is mode-scoped:
+    //   navigate -- the full keymap (Alt+T/D/J/K/R, Enter to focus).
+    //   focus    -- only Alt+Esc (back to navigate); everything else, plain
+    //               Esc included, falls through to the pty.
+    // The modal-input guard keeps the rename field's own Enter/Esc/typing.
     document.addEventListener('keydown', (e) => {
       if (document.activeElement?.classList.contains('modal-input')) return;
-      const id = readJson('keymap')[comboKey(e)];
+      const combo = comboKey(e);
+      if (mode === 'focus') {
+        if (combo === 'alt+escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          setMode('navigate');
+        }
+        return;
+      }
+      const id = readJson('keymap')[combo];
       if (!id) return;
       const js = readJson('actions')[id];
       if (!js) return;

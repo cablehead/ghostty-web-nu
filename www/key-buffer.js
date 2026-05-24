@@ -84,11 +84,15 @@ function isEditableTarget(t) {
 }
 
 class KeyBuffer extends HTMLElement {
-  static observedAttributes = ['sid'];
+  static observedAttributes = ['sid', 'enabled'];
 
   constructor() {
     super();
     this._sid = '';
+    // Enabled by default; the sessions surface gates this on focus mode so
+    // keystrokes only reach the pty when a terminal is focused. Single-pane
+    // never sets the attribute, so it stays enabled.
+    this._enabled = true;
     this._pending = []; // [{id, display}]
     this._nextId = 1;
     this._onKey = this._onKey.bind(this);
@@ -124,7 +128,7 @@ class KeyBuffer extends HTMLElement {
   }
 
   _onPaste(ev) {
-    if (!this._sid) return;
+    if (!this._enabled || !this._sid) return;
     const text = ev.clipboardData?.getData('text');
     if (!text) return;
     ev.preventDefault();
@@ -150,11 +154,18 @@ class KeyBuffer extends HTMLElement {
   attributeChangedCallback(name, _old, value) {
     if (name === 'sid') {
       this._sid = value || '';
+    } else if (name === 'enabled') {
+      // Absent attribute -> enabled. Present -> enabled unless "false".
+      this._enabled = value !== 'false';
+      if (!this._enabled && this._pending.length) {
+        this._pending = [];
+        this._render();
+      }
     }
   }
 
   _onKey(ev) {
-    if (!this._sid) return;
+    if (!this._enabled || !this._sid) return;
     // Don't hijack keys meant for an editable element (e.g. the sessions
     // rename modal input). The pty only owns keystrokes typed at the page
     // itself, not into a form field.
