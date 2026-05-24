@@ -74,7 +74,9 @@
   white-space: pre;
 }
 
-.row {
+/* Scoped to #grid: the sessions sidebar also uses a `.row` class for its
+   tab buttons, and an unscoped height here would clip them to one cell. */
+#grid .row {
   display: block;
   height: var(--cell-h);
 }
