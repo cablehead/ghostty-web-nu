@@ -9,18 +9,29 @@
   <script type="module" src="/key-buffer.js"></script>
 </head>
 <body
-  data-signals="{sid: ''}"
+  data-signals="{sid: '', cols: 0, rows: 0, title: ''}"
   data-on:sid-ready__window="$sid = evt.detail.sid"
   data-effect="$sid && @get('/pty/view?sid=' + $sid, {openWhenHidden: true})"
+  data-effect="document.title = $title || 'ghostty-web-nu'"
 >
-  <div id="status">connecting...</div>
+  <div
+    id="status"
+    data-text="$cols > 0 ? ('sid ' + ($sid ? $sid.slice(0,8) : '') + ' (' + $cols + 'x' + $rows + ')') : 'connecting...'"
+  >connecting...</div>
   <div id="screen"><div id="grid"></div></div>
   <key-buffer data-attr:sid="$sid"></key-buffer>
 
   <script type="module">
-    // Wait for the @font-face Inconsolata to actually arrive before probing
-    // the cell. Otherwise we measure the fallback (Monaco) and the server
-    // gets cols/rows that don't match what fits.
+    // Explicitly load the vendored terminal font before probing the cell.
+    // An @font-face only loads when used, so document.fonts.ready alone can
+    // resolve before it arrives -- then we'd measure a fallback and the
+    // server would get cols/rows that don't match what actually fits.
+    try {
+      await Promise.all([
+        document.fonts.load('14px JetBrainsMonoNerd'),
+        document.fonts.load('bold 14px JetBrainsMonoNerd'),
+      ]);
+    } catch {}
     await document.fonts.ready;
 
     function measureCell() {
@@ -38,8 +49,12 @@
     const screen = document.getElementById('screen');
 
     function viewportCells(cell) {
+      // Use the scroll container's clientWidth, not window.innerWidth, so the
+      // reserved scrollbar gutter (scrollbar-gutter: stable) is excluded --
+      // otherwise we request one column too many and it clips on the right.
+      const availW = screen.clientWidth || window.innerWidth;
       return {
-        cols: Math.max(20, Math.floor(window.innerWidth / cell.w)),
+        cols: Math.max(20, Math.floor(availW / cell.w)),
         rows: Math.max(5, Math.floor(window.innerHeight / cell.h)),
       };
     }
@@ -54,38 +69,10 @@
       screen.style.height = Math.round(rows * cell.h) + 'px';
     }
 
-    // Live status: reads dims off the grid itself. Updates whenever the
-    // server emits a new frame whose data-cols/data-rows differ from the
-    // last one. This is what the user sees during a resize -- the moment
-    // the server acks the new size, the status text changes.
-    let lastDims = '';
-    function syncStatus() {
-      const c = grid.dataset.cols || '?';
-      const r = grid.dataset.rows || '?';
-      const dims = `${c}x${r}`;
-      if (dims !== lastDims) {
-        lastDims = dims;
-        const sidPart = window.__sid ? window.__sid.slice(0, 8) : '';
-        status.textContent = sidPart ? `sid ${sidPart} (${dims})` : `(${dims})`;
-      }
-    }
-    new MutationObserver(syncStatus).observe(grid, {
-      attributes: true,
-      attributeFilter: ['data-cols', 'data-rows'],
-    });
-
-    // Mirror the pty's OSC 0/2 title into document.title. Empty string means
-    // nothing's set; fall back to the page's default in that case.
-    const defaultTitle = document.title;
-    function syncTitle() {
-      const t = grid.dataset.title || '';
-      const next = t ? t : defaultTitle;
-      if (document.title !== next) document.title = next;
-    }
-    new MutationObserver(syncTitle).observe(grid, {
-      attributes: true,
-      attributeFilter: ['data-title'],
-    });
+    // Status text and document.title are driven entirely by signals the
+    // server patches alongside each frame ($cols, $rows, $title), bound
+    // declaratively on the #status element and body data-effect. No DOM
+    // observers needed.
 
     // Auto-stick-to-bottom: when the user is at (or near) the bottom of the
     // scrollback and a new frame morphs in, snap to the bottom so the live
@@ -126,7 +113,6 @@
     let sid = sessionStorage.getItem('sid');
     let reattached = false;
     if (sid) {
-      status.textContent = `reattaching ${sid.slice(0, 8)}...`;
       try {
         const r = await fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
           method: 'POST',
@@ -141,7 +127,6 @@
       }
     }
     if (!sid) {
-      status.textContent = `requesting ${initial.cols}x${initial.rows}...`;
       try {
         const r = await fetch('/pty/create', {
           method: 'POST',
@@ -151,12 +136,13 @@
         ({ sid } = await r.json());
         sessionStorage.setItem('sid', sid);
       } catch (e) {
+        // No frame will arrive, so the $cols-driven status binding stays on
+        // "connecting..."; surface the failure directly instead.
         status.textContent = 'pty/create failed: ' + e.message;
         throw e;
       }
     }
     window.__sid = sid;
-    syncStatus();
     window.dispatchEvent(new CustomEvent('sid-ready', { detail: { sid } }));
 
     // Re-measure on every resize -- catches browser zoom changes and any

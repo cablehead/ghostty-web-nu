@@ -10,6 +10,26 @@
  * stable rows in place and rewrites only the cell runs that changed.
  */
 
+/* Vendored JetBrains Mono NL Nerd Font (Mono variant: single-width icons,
+ * no ligatures). A complete monospace face with box-drawing, block,
+ * powerline, and Nerd Font icon glyphs all at uniform advance -- so a
+ * nushell `ls` table (whose borders are ambiguous-width box chars) stays
+ * aligned without the browser substituting a non-monospace fallback. */
+@font-face {
+  font-family: 'JetBrainsMonoNerd';
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMonoNLNerdFontMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrainsMonoNerd';
+  font-weight: bold;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMonoNLNerdFontMono-Bold.woff2') format('woff2');
+}
+
 :root {
   --term-bg: #1e1e1e;
   --term-fg: #d4d4d4;
@@ -17,6 +37,11 @@
      container exactly -- a fractional (em-based) line-height leaves a
      sub-pixel sliver clipped at the top when scrolled to the bottom. */
   --cell-h: 17px;
+  /* Single complete monospace face for the grid. No multi-font fallback
+     here on purpose: a fallback font would advance box-drawing glyphs at a
+     different width and break column alignment. The generic monospace is
+     only a last resort if the woff2 fails to load. */
+  --term-font: 'JetBrainsMonoNerd', monospace;
 }
 
 html, body {
@@ -65,7 +90,7 @@ body {
 }
 
 #grid {
-  font-family: inherit;
+  font-family: var(--term-font);
   font-size: inherit;
   line-height: var(--cell-h);
   white-space: pre;
@@ -81,7 +106,7 @@ body {
   visibility: hidden;
   top: -9999px;
   left: -9999px;
-  font-family: inherit;
+  font-family: var(--term-font);
   font-size: inherit;
   line-height: var(--cell-h);
   white-space: pre;
