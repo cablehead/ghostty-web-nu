@@ -73,6 +73,42 @@ def save-focused-sid [sid: string]: nothing -> nothing {
   null | .append "ghostty.focused" --meta {sid: $sid} --ttl forever | ignore
 }
 
+# --- terminal clips ----------------------------------------------------------
+# A terminal "clip" is a durable marker in the log that a terminal belongs in
+# this window. The live pty is ephemeral: bound to the clip by a clip_id tag
+# in the pty's meta, and respawned fresh if the process is gone (e.g. after a
+# server restart) -- zellij-style "remember where the panes were". Session
+# state (scrollback) is not persisted; only the placement is.
+#
+#   clip.add     meta {type}        frame.id = clip_id
+#   clip.delete  meta {clip_id}
+
+# Clips still live: clip.add frames whose id has no matching clip.delete.
+def live-clips []: nothing -> list {
+  let deleted = (.cat | where {|f| $f.topic == "clip.delete" } | each {|f| $f.meta.clip_id? } | compact)
+  .cat
+  | where {|f| $f.topic == "clip.add" }
+  | where {|f| $f.id not-in $deleted }
+}
+
+def add-clip []: nothing -> string {
+  let f = (null | .append "clip.add" --meta {type: "terminal"} --ttl forever)
+  $f.id
+}
+
+def delete-clip [cid: string]: nothing -> nothing {
+  null | .append "clip.delete" --meta {clip_id: $cid} --ttl forever | ignore
+}
+
+# Spawn a pty for a clip and tag it (meta.clip_id) so it can be rebound to
+# the same clip after a restart.
+def spawn-for-clip [cid: string]: nothing -> string {
+  let cmd = $env.GHOSTTY_WEB_NU_CMD? | default "nu"
+  let sid = if $cmd == "nu" { pty open --embedded } else { pty open $cmd }
+  pty meta set $sid "clip_id" $cid
+  $sid
+}
+
 # Render the left-pane session list as plain HTML. Returns a string suitable
 # for `to datastar-patch-elements`. Dimensions live in the bottom-right meta
 # corner of the focused pane (driven by the $focusedDims signal), not the
@@ -126,15 +162,20 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       let conn_id = if $prior_conn == "" { random uuid } else { $prior_conn }
       let requested_sid = ($signals.selectedSid? | default "")
 
-      # Bootstrap: honor the client's selection if the sid still exists;
-      # otherwise pick the first live pty, spawning one if none exist.
-      # GHOSTTY_WEB_NU_CMD matches the path /pty/new takes.
+      # Bootstrap. If the pty map is empty (fresh server start), respawn a
+      # pty for every live clip so terminals come back where they were; if
+      # there are no clips at all, seed one. Then honor the client's
+      # selection if its sid still exists, else fall back to most-recent.
+      if (pty list | is-empty) {
+        if (live-clips | is-empty) {
+          spawn-for-clip (add-clip) | ignore
+        } else {
+          for c in (live-clips) { spawn-for-clip $c.id | ignore }
+        }
+      }
       let bootstrap = (pty list)
       let live_sids = ($bootstrap | get sid)
-      let cmd = $env.GHOSTTY_WEB_NU_CMD? | default "nu"
-      let initial_sid = if ($bootstrap | is-empty) {
-        if $cmd == "nu" { pty open --embedded } else { pty open $cmd }
-      } else if ($requested_sid in $live_sids) {
+      let initial_sid = if ($requested_sid in $live_sids) {
         $requested_sid
       } else {
         # Hard refresh loses $selectedSid (datastar signals reset to defaults).
@@ -234,17 +275,12 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
     }
 
     [POST, "/pty/new"] => {
-      # Spawn an embedded nu pty and publish a nav.events for the requesting
-      # connection so the new session becomes the selected one. The
-      # `pty open` itself publishes `pty.events {event: created}` so every
-      # connected /sse sees the new row appear in the list.
+      # Record a durable terminal clip, spawn a pty bound to it, and select
+      # it for the requesting connection. The `pty open` publishes
+      # `pty.events {event: created}` so every connected /sse sees the new
+      # row appear in the list.
       let signals = $body | from datastar-signals $req
-      let cmd = $env.GHOSTTY_WEB_NU_CMD? | default "nu"
-      let sid = if $cmd == "nu" {
-        pty open --embedded
-      } else {
-        pty open $cmd
-      }
+      let sid = (spawn-for-clip (add-clip))
       save-focused-sid $sid
       {connId: ($signals.connId? | default ""), sid: $sid} | .bus pub "nav.events"
       null | metadata set { merge {'http.response': {status: 204}} }
@@ -358,7 +394,11 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
     }
 
     [POST, "/pty/close"] => {
-      pty close $req.query.sid
+      # Tombstone the clip so it won't respawn, then kill the pty.
+      let sid = $req.query.sid
+      let cid = (try { pty meta get $sid "clip_id" } catch { null })
+      if ($cid | is-not-empty) { delete-clip $cid }
+      pty close $sid
       null | metadata set { merge {'http.response': {status: 204}} }
     }
 
