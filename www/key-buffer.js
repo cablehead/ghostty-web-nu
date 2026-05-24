@@ -75,6 +75,14 @@ function keyEventToInput(ev) {
   return null;
 }
 
+/** True when keystrokes belong to a form field / editable region rather
+ *  than the terminal (so we leave them alone). */
+function isEditableTarget(t) {
+  if (!t || !t.tagName) return false;
+  const tag = t.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable === true;
+}
+
 class KeyBuffer extends HTMLElement {
   static observedAttributes = ['sid'];
 
@@ -147,6 +155,13 @@ class KeyBuffer extends HTMLElement {
 
   _onKey(ev) {
     if (!this._sid) return;
+    // Don't hijack keys meant for an editable element (e.g. the sessions
+    // rename modal input). The pty only owns keystrokes typed at the page
+    // itself, not into a form field.
+    if (isEditableTarget(ev.target)) return;
+    // App-level shortcuts (e.g. the sessions Alt+T/J/K keymap) intercept in
+    // the capture phase and stopImmediatePropagation, so they never reach
+    // this bubble-phase listener. Nothing to special-case here.
     // Ctrl+C on a non-empty selection copies, doesn't interrupt. Mirrors
     // every terminal emulator's "selection beats SIGINT" rule. Cmd+C on
     // macOS is handled by the browser itself, so we don't touch it here.

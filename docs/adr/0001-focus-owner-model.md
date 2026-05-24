@@ -1,5 +1,9 @@
 # ADR 0001: Focus Owner Model
 
+> Superseded by [0003](0003-server-rendered-projection.md). The terminal is
+> no longer a focusable element (input is a window-level key-buffer), so the
+> focus-owner policy collapses to "ignore keys aimed at an editable element."
+
 ## Context
 
 The sessions UI has one primary interaction surface (the terminal) and a

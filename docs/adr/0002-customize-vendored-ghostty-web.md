@@ -1,5 +1,9 @@
 # ADR 0002: Customize the Vendored ghostty-web.js
 
+> Superseded by [0003](0003-server-rendered-projection.md). ghostty-web is
+> no longer vendored -- the browser renders a server-produced HTML grid, and
+> the scrollbar is native -- so there is nothing left to patch.
+
 ## Context
 
 `www/ghostty-web.js` is the compiled ES module from the `ghostty-web`

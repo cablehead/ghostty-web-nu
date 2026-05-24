@@ -4,113 +4,55 @@
   <meta charset="utf-8">
   <title>ghostty-web-nu</title>
   <link rel="stylesheet" href="/stellar.css">
+  <link rel="stylesheet" href="/grid.css">
   <link rel="stylesheet" href="/term.css">
   <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"></script>
   <script type="module" src="/key-buffer.js"></script>
 </head>
 <body
-  data-signals="{sid: '', cols: 0, rows: 0, title: ''}"
+  data-signals="{sid: '', termCols: 0, termRows: 0, termTitle: ''}"
   data-on:sid-ready__window="$sid = evt.detail.sid"
-  data-effect="$sid && @get('/pty/view?sid=' + $sid, {openWhenHidden: true})"
-  data-effect="document.title = $title || 'ghostty-web-nu'"
+  data-effect="document.title = $termTitle || 'ghostty-web-nu'"
 >
   <div
     id="status"
-    data-text="$cols > 0 ? ('sid ' + ($sid ? $sid.slice(0,8) : '') + ' (' + $cols + 'x' + $rows + ')') : 'connecting...'"
+    data-text="$termCols > 0 ? ('sid ' + ($sid ? $sid.slice(0,8) : '') + ' (' + $termCols + 'x' + $termRows + ')') : 'connecting...'"
   >connecting...</div>
-  <div id="screen"><div id="grid"></div></div>
+  <div id="screen" data-effect="$sid && @get('/pty/view?sid=' + $sid, {openWhenHidden: true})"><div id="grid"></div></div>
   <key-buffer data-attr:sid="$sid"></key-buffer>
 
   <script type="module">
-    // Explicitly load the vendored terminal font before probing the cell.
-    // An @font-face only loads when used, so document.fonts.ready alone can
-    // resolve before it arrives -- then we'd measure a fallback and the
-    // server would get cols/rows that don't match what actually fits.
-    try {
-      await Promise.all([
-        document.fonts.load('14px JetBrainsMonoNerd'),
-        document.fonts.load('bold 14px JetBrainsMonoNerd'),
-      ]);
-    } catch {}
-    await document.fonts.ready;
+    import { ensureTermFont, mountTerminal } from './terminal.js';
 
-    function measureCell() {
-      const probe = document.createElement('span');
-      probe.className = 'cell-probe';
-      probe.textContent = 'M'.repeat(80);
-      document.body.appendChild(probe);
-      const rect = probe.getBoundingClientRect();
-      probe.remove();
-      return { w: rect.width / 80, h: rect.height };
-    }
+    await ensureTermFont();
 
-    const status = document.getElementById('status');
-    const grid = document.getElementById('grid');
     const screen = document.getElementById('screen');
+    const grid = document.getElementById('grid');
+    const status = document.getElementById('status');
 
-    function viewportCells(cell) {
-      // Use the scroll container's clientWidth, not window.innerWidth, so the
-      // reserved scrollbar gutter (scrollbar-gutter: stable) is excluded --
-      // otherwise we request one column too many and it clips on the right.
-      const availW = screen.clientWidth || window.innerWidth;
-      return {
-        cols: Math.max(20, Math.floor(availW / cell.w)),
-        rows: Math.max(5, Math.floor(window.innerHeight / cell.h)),
-      };
-    }
-
-    // Pin the scroll container to a whole number of rows tall. If the
-    // viewport height isn't an exact multiple of the row height, the
-    // leftover sub-row gap sits below the container (filled by the body
-    // background) rather than clipping a half-row at the top when scrolled
-    // to the bottom. Lives on #screen, not #grid, because the server morphs
-    // #grid every frame and would strip an inline style off it.
-    function applyGridHeight(cell, rows) {
-      screen.style.height = Math.round(rows * cell.h) + 'px';
-    }
-
-    // Status text and document.title are driven entirely by signals the
-    // server patches alongside each frame ($cols, $rows, $title), bound
-    // declaratively on the #status element and body data-effect. No DOM
-    // observers needed.
-
-    // Auto-stick-to-bottom: when the user is at (or near) the bottom of the
-    // scrollback and a new frame morphs in, snap to the bottom so the live
-    // tail stays visible. When they've scrolled up, leave the position alone
-    // -- new output accumulates below the visible viewport until they
-    // scroll back to the bottom.
-    //
-    // Distinguishing "user scrolled" from "we scrolled" is done with a
-    // suppression flag set immediately before the programmatic scrollTop
-    // write. The scroll event fires synchronously from that write, so the
-    // flag is reliably consumed before any user scroll could arrive.
-    let stickToBottom = true;
-    let suppressNextScroll = false;
-    screen.addEventListener('scroll', () => {
-      if (suppressNextScroll) {
-        suppressNextScroll = false;
-        return;
-      }
-      stickToBottom = screen.scrollHeight - screen.scrollTop - screen.clientHeight < 8;
+    // currentSid is set after bootstrap; the resize callback reads it so a
+    // resize that fires before the pty exists is a no-op.
+    let sid = null;
+    const term = mountTerminal({
+      screen,
+      grid,
+      onResize: (cols, rows) => {
+        if (!sid) return;
+        fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cols, rows }),
+        }).catch(() => {});
+      },
     });
-    new MutationObserver(() => {
-      if (stickToBottom && screen.scrollTop !== screen.scrollHeight - screen.clientHeight) {
-        suppressNextScroll = true;
-        screen.scrollTop = screen.scrollHeight;
-      }
-    }).observe(grid, { childList: true, subtree: true, characterData: true });
-
-    let cell = measureCell();
-    const initial = viewportCells(cell);
-    applyGridHeight(cell, initial.rows);
+    const initial = term.initialDims;
 
     // Reattach to the prior sid on refresh. sessionStorage scopes to this
-    // tab, so a refresh hits the same pty while a new tab gets its own.
-    // The probe is POST /pty/resize -- a 204 means the sid is alive AND
-    // the dims are updated to the current viewport in one round trip; any
-    // other status (404/500 from the server when the sid is unknown) means
-    // we need to mint a fresh one.
-    let sid = sessionStorage.getItem('sid');
+    // tab, so a refresh hits the same pty while a new tab gets its own. The
+    // probe is POST /pty/resize -- a 204 means the sid is alive AND the dims
+    // are updated to the current viewport in one round trip; any other
+    // status means we mint a fresh one.
+    sid = sessionStorage.getItem('sid');
     let reattached = false;
     if (sid) {
       try {
@@ -136,37 +78,14 @@
         ({ sid } = await r.json());
         sessionStorage.setItem('sid', sid);
       } catch (e) {
-        // No frame will arrive, so the $cols-driven status binding stays on
-        // "connecting..."; surface the failure directly instead.
+        // No frame will arrive, so the $termCols-driven status binding stays
+        // on "connecting..."; surface the failure directly instead.
         status.textContent = 'pty/create failed: ' + e.message;
         throw e;
       }
     }
     window.__sid = sid;
     window.dispatchEvent(new CustomEvent('sid-ready', { detail: { sid } }));
-
-    // Re-measure on every resize -- catches browser zoom changes and any
-    // font-metric oddities that show up at different viewport sizes.
-    let resizeTimer;
-    let lastSent = `${initial.cols}x${initial.rows}`;
-    window.addEventListener('resize', () => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(async () => {
-        cell = measureCell();
-        const { cols, rows } = viewportCells(cell);
-        applyGridHeight(cell, rows);
-        const key = `${cols}x${rows}`;
-        if (key === lastSent) return;
-        lastSent = key;
-        try {
-          await fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ cols, rows }),
-          });
-        } catch {}
-      }, 80);
-    });
   </script>
 </body>
 </html>

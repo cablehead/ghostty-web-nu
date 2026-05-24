@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title or "ghostty-web-nu sessions" }}</title>
+  <script type="module" src="{{ datastar_js_path }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/iconify-icon@2/dist/iconify-icon.min.js"></script>
+  <script type="module" src="/key-buffer.js"></script>
+  <link rel="stylesheet" href="/stellar.css">
+  <link rel="stylesheet" href="/md.css">
+  <link rel="stylesheet" href="/grid.css">
+  <style>
+    :root {
+      --bg: #1d0e2e; --fg: #d4d4d4;
+      --pane: #161616; --pane-border: #2a2a2a;
+      --sel: #2a9d4a; --sel-fg: #ffffff; --dim: #888;
+      --chrome: #252525;
+    }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px var(--term-font); }
+    body { display: grid; grid-template-columns: 14rem 1fr auto; height: 100dvh; }
+    aside { background: var(--pane); border-right: 1px solid var(--pane-border); overflow-y: auto; min-height: 0; }
+    aside header { padding: .4rem .5rem .4rem .75rem; border-bottom: 1px solid var(--pane-border); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; justify-content: space-between; }
+    aside header .new-btn { background: transparent; color: inherit; border: 1px solid var(--pane-border); border-radius: 3px; padding: 0 .5rem; font: inherit; cursor: pointer; line-height: 1.4; }
+    aside header .new-btn:hover { background: #222; color: var(--fg); }
+    aside ul { list-style: none; margin: 0; padding: 0; }
+    aside li { display: flex; align-items: stretch; border-bottom: 1px solid var(--pane-border); }
+    aside li .row { flex: 1; min-width: 0; text-align: left; background: transparent; color: inherit; border: 0; padding: .4rem .75rem; font: inherit; cursor: pointer; overflow: hidden; }
+    aside li .row:hover { background: #222; }
+    aside li.selected .row { background: var(--sel); color: var(--sel-fg); }
+    aside li .close { flex: 0 0 auto; width: 1.75rem; background: transparent; color: inherit; border: 0; padding: 0; font: inherit; cursor: pointer; opacity: 0; transition: opacity .1s; }
+    aside li:hover .close, aside li.selected .close { opacity: .6; }
+    aside li .close:hover { opacity: 1; color: #ff7676; background: #222; }
+    aside li .copy { flex: 0 0 auto; width: 1.75rem; display: flex; align-items: center; justify-content: center; background: transparent; color: inherit; border: 0; padding: 0; font: inherit; cursor: pointer; opacity: 0; transition: opacity .1s; }
+    aside li:hover .copy, aside li.selected .copy { opacity: .6; }
+    aside li .copy:hover { opacity: 1; background: #222; }
+    aside li .copy iconify-icon { font-size: 13px; }
+    aside li .copy.copied { opacity: 1; color: var(--sel); }
+    aside li small { display: block; font-size: 11px; opacity: .6; }
+    /* main is a grid: topbar | (terminal + rightbar) | statusbar. */
+    main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; overflow: hidden; }
+    .topbar {
+      background: var(--chrome); padding: .15rem .75rem;
+      display: flex; align-items: center;
+      font-size: 11px; color: var(--dim);
+    }
+    .title-display { cursor: pointer; padding: 0 .25rem; border-radius: 2px; }
+    .title-display:hover { background: #2f2f2f; color: var(--fg); }
+    .middle { display: grid; grid-template-columns: 1fr 1ch; min-height: 0; }
+    /* .term-wrap is the positioned ancestor that grid.css's #screen fills
+       (position:absolute; inset). It carries the terminal background so the
+       sub-row remainder below the row-aligned #screen blends in. */
+    .term-wrap { position: relative; min-height: 0; overflow: hidden; background: var(--term-bg); }
+    .rightbar { background: var(--chrome); }
+    .statusbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 1rem 2.5rem 1rem .75rem;
+      background: var(--chrome); color: var(--fg);
+      border-top: 1px solid var(--pane-border);
+      font-size: 11px; line-height: 1;
+      font-family: var(--term-font);
+    }
+    /* Right-side canvas pane. Lives in body's third grid column (`auto`), so
+       when :empty the column collapses to 0 and the terminal gets full width.
+       Server pushes content via the same /sse stream (canvas.events). */
+    .canvas {
+      position: relative;
+      width: var(--canvas-w, 32rem); min-height: 0; overflow: auto;
+      background: var(--pane); border-left: 1px solid var(--pane-border);
+      padding: .75rem; box-sizing: border-box;
+      font-size: 12px;
+    }
+    .canvas:empty { display: none; }
+    .canvas pre { margin: 0; white-space: pre; }
+    .canvas-resizer {
+      position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
+      cursor: col-resize; background: transparent;
+      transition: background .15s;
+    }
+    .canvas-resizer:hover, body.canvas-dragging .canvas-resizer { background: var(--sel); }
+    .canvas-content { height: 100%; }
+    body.canvas-dragging { user-select: none; cursor: col-resize; }
+    body.canvas-dragging .term-wrap, body.canvas-dragging .canvas-content { pointer-events: none; }
+
+    /* Rename modal. */
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0, 0, 0, 0.45);
+      display: flex; align-items: flex-start; justify-content: center;
+      padding-top: 6rem;
+    }
+    .modal-box {
+      width: min(28rem, 90%);
+      background: var(--pane);
+      border: 1px solid var(--pane-border);
+      border-radius: 4px;
+      padding: .75rem 1rem;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+    .modal-heading {
+      font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+      color: var(--dim); margin-bottom: .35rem;
+    }
+    .modal-input {
+      width: 100%; background: transparent; border: 0; outline: none;
+      color: var(--fg); font: inherit; font-size: 14px;
+      padding: .25rem 0;
+    }
+  </style>
+</head>
+<body
+  data-signals='{"selectedSid":"","connId":"","sid":"","sel":"","termCols":0,"termRows":0,"termTitle":"","title":{{ title | default("") | tojson | e }},"renaming":false,"renameMode":"title","draft":"","label":""}'
+  data-init="@get('/sse')"
+  data-effect="document.title = $title || 'ghostty-web-nu sessions'"
+  data-actions='{
+    "new":       "window.app.newSession()",
+    "close":     "window.app.closeSelected()",
+    "next":      "window.app.cycle(1)",
+    "prev":      "window.app.cycle(-1)",
+    "rename":    "window.app.openRename()",
+    "renameTab": "window.app.openRenameTab()"
+  }'
+  data-keymap='{
+    "alt+t": "new",
+    "alt+d": "close",
+    "alt+j": "next",
+    "alt+k": "prev",
+    "alt+r": "renameTab",
+    "alt+shift+r": "rename"
+  }'
+>
+  <!-- Server overwrites this on every event. -->
+  <aside id="sessions-list"><header>Sessions</header></aside>
+
+  <main>
+    <div class="topbar">
+      <span
+        class="title-display"
+        title="Rename (Alt+Shift+R)"
+        data-text="$title || 'untitled'"
+        data-on:click="$draft = $title; $renameMode = 'title'; $renaming = true"></span>
+    </div>
+    <div class="middle">
+      <div class="term-wrap">
+        <!-- Projection grid. data-sid mirrors $selectedSid onto #screen (the
+             scroll container the server never morphs); a MutationObserver
+             resizes the newly-focused pty to the pane on switch. The view
+             SSE itself is re-pointed by the body data-effect above. -->
+        <div
+          id="screen"
+          data-attr:data-sid="$selectedSid"
+          data-effect="$selectedSid && @get('/pty/view?sid=' + $selectedSid, {openWhenHidden: true})"
+        ><div id="grid"></div></div>
+      </div>
+      <div class="rightbar"></div>
+    </div>
+    <footer class="statusbar" aria-label="Status">
+      <span></span>
+      <span data-text="$termCols > 0 ? ($termCols + 'x' + $termRows) : ''"></span>
+    </footer>
+  </main>
+
+  <!-- Server-pushed canvas pane. Empty -> collapses to 0 width. -->
+  <section id="canvas" class="canvas"></section>
+
+  <!-- Hidden trigger so the JS-only Alt+R action can seed signals through
+       datastar's expression evaluator. -->
+  <button
+    id="rename-tab-trigger"
+    type="button"
+    hidden
+    data-on:click="$draft = el.dataset.label || ''; $renameMode = 'tab'; $renaming = true"></button>
+
+  <!-- Rename modal. -->
+  <div class="modal-backdrop" data-show="$renaming" data-on:click="$renaming = false">
+    <div class="modal-box" data-on:click="evt.stopPropagation()">
+      <div class="modal-heading" data-text="$renameMode === 'tab' ? 'Rename tab' : 'Rename window'"></div>
+      <input
+        type="text"
+        class="modal-input"
+        spellcheck="false"
+        aria-label="rename"
+        data-bind="draft"
+        data-effect="$renaming && requestAnimationFrame(() => { el.focus(); el.setSelectionRange(0, el.value.length); })"
+        data-on:keydown="if (evt.key === 'Enter') { if ($renameMode === 'tab') { $label = $draft; $renaming = false; @post('/pty/label') } else { $title = $draft; $renaming = false; @post('/title') } } else if (evt.key === 'Escape') { $renaming = false }">
+    </div>
+  </div>
+
+  <key-buffer data-attr:sid="$selectedSid"></key-buffer>
+
+  <script type="module">
+    import { ensureTermFont, mountTerminal } from './terminal.js';
+    await ensureTermFont();
+
+    // Restore the canvas width set by the last drag.
+    {
+      const w = localStorage.getItem('canvas-w');
+      if (w) document.body.style.setProperty('--canvas-w', w);
+    }
+
+    const screen = document.getElementById('screen');
+    const grid = document.getElementById('grid');
+
+    // Terminal mechanics. onResize POSTs for whichever sid is currently
+    // mirrored onto #screen (data-sid), so a resize always targets the
+    // focused pty. The pane geometry also changes when the sidebar/canvas
+    // resize -- the ResizeObserver inside mountTerminal catches that.
+    const term = mountTerminal({
+      screen,
+      grid,
+      onResize: (cols, rows) => {
+        const sid = screen.dataset.sid;
+        if (!sid) return;
+        fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cols, rows }),
+        }).catch(() => {});
+      },
+    });
+
+    // Session switch: $selectedSid -> #screen[data-sid] changes; re-measure
+    // and resize the newly-focused pty to the current pane so its first
+    // frame is sized right (the body data-effect re-points the view SSE).
+    new MutationObserver(() => term.syncNow()).observe(screen, {
+      attributes: true,
+      attributeFilter: ['data-sid'],
+    });
+    // The observer may attach after Datastar has already mirrored the initial
+    // $selectedSid onto data-sid, missing that first transition. Size the
+    // already-selected pty to the pane once on startup.
+    if (screen.dataset.sid) term.syncNow();
+
+    // Sidebar copy-sid button (delegated; rows are re-rendered by datastar).
+    document.addEventListener('click', (e) => {
+      const btn = e.target instanceof HTMLElement ? e.target.closest('.copy') : null;
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const sid = btn.dataset.sid || '';
+      if (!sid) return;
+      navigator.clipboard?.writeText(sid).then(() => {
+        btn.classList.add('copied');
+        setTimeout(() => btn.classList.remove('copied'), 600);
+      }).catch(() => {});
+    });
+
+    // Drag-to-resize the canvas pane (delegated; .canvas-resizer is
+    // re-created on every #canvas patch).
+    document.addEventListener('mousedown', (e) => {
+      if (!(e.target instanceof HTMLElement) || !e.target.classList.contains('canvas-resizer')) return;
+      e.preventDefault();
+      document.body.classList.add('canvas-dragging');
+      const onMove = (ev) => {
+        const min = 12 * 16, maxTake = window.innerWidth - 24 * 16;
+        const w = Math.max(min, Math.min(maxTake, window.innerWidth - ev.clientX));
+        document.body.style.setProperty('--canvas-w', w + 'px');
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('canvas-dragging');
+        const w = document.body.style.getPropertyValue('--canvas-w');
+        if (w) localStorage.setItem('canvas-w', w);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    // Action registry. data-actions maps id -> JS, data-keymap maps combo ->
+    // id. The capture-phase handler below evaluates the matched action's JS.
+    window.app = {
+      newSession() {
+        document.querySelector('#sessions-list .new-btn')?.click();
+      },
+      closeSelected() {
+        const sid = screen.dataset.sid;
+        if (!sid) return;
+        fetch('/pty/close?sid=' + encodeURIComponent(sid), { method: 'POST' }).catch(() => {});
+      },
+      cycle(dir) {
+        const items = [...document.querySelectorAll('#sessions-list li')];
+        if (!items.length) return;
+        const idx = items.findIndex((li) => li.classList.contains('selected'));
+        const next = items[((idx < 0 ? 0 : idx) + dir + items.length) % items.length];
+        next.querySelector('.row')?.click();
+      },
+      openRename() {
+        document.querySelector('.title-display')?.click();
+      },
+      openRenameTab() {
+        const btn = document.querySelector('#sessions-list li.selected .row');
+        if (!btn) return;
+        const label = btn.firstChild?.textContent?.trim() ?? '';
+        const trig = document.getElementById('rename-tab-trigger');
+        if (!trig) return;
+        trig.dataset.label = label;
+        trig.click();
+      },
+    };
+
+    // Combo normalization. macOS substitutes a glyph for e.key when Alt is
+    // held (option+d -> the partial-derivative sign); fall back to e.code
+    // (KeyD -> "d") so alt+letter combos still match.
+    function comboKey(e) {
+      const parts = [];
+      if (e.metaKey) parts.push('cmd');
+      if (e.ctrlKey) parts.push('ctrl');
+      if (e.altKey) parts.push('alt');
+      if (e.shiftKey) parts.push('shift');
+      let k = e.key;
+      if (e.altKey && e.code && e.code.startsWith('Key')) {
+        k = e.code.slice(3).toLowerCase();
+      } else if (k.length === 1 && /[a-zA-Z]/.test(k)) {
+        k = k.toLowerCase();
+      } else if (k === ' ') {
+        k = 'space';
+      }
+      parts.push(k.toLowerCase());
+      return parts.join('+');
+    }
+    function readJson(name) {
+      const raw = document.body.dataset[name];
+      if (!raw) return {};
+      try { return JSON.parse(raw); } catch { return {}; }
+    }
+    // Capture-phase: a matched app combo calls stopPropagation, so it never
+    // reaches key-buffer's window (bubble-phase) keydown listener -- that's
+    // how Alt+T means "new session" instead of ESC+t to the pty. Bail while
+    // the rename modal owns focus so its input keeps Enter/Esc/typing.
+    document.addEventListener('keydown', (e) => {
+      if (document.activeElement?.classList.contains('modal-input')) return;
+      const id = readJson('keymap')[comboKey(e)];
+      if (!id) return;
+      const js = readJson('actions')[id];
+      if (!js) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try { new Function(js)(); } catch (err) { console.error('action', id, err); }
+    }, { capture: true });
+  </script>
+</body>
+</html>
