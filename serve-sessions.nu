@@ -100,12 +100,27 @@ def delete-clip [cid: string]: nothing -> nothing {
   null | .append "clip.delete" --meta {clip_id: $cid} --ttl forever | ignore
 }
 
+# A clip's label persists as clip.patch {clip_id, label} frames; latest wins.
+# This is what survives a respawn (the live pty's meta.label is ephemeral).
+def clip-label [cid: string]: nothing -> string {
+  let f = (.cat
+    | where {|f| $f.topic == "clip.patch" and (($f.meta.clip_id? | default "") == $cid) }
+    | last)
+  if ($f | is-empty) { "" } else { ($f.meta.label? | default "") }
+}
+
+def set-clip-label [cid: string, label: string]: nothing -> nothing {
+  null | .append "clip.patch" --meta {clip_id: $cid, label: $label} --ttl forever | ignore
+}
+
 # Spawn a pty for a clip and tag it (meta.clip_id) so it can be rebound to
-# the same clip after a restart.
+# the same clip after a restart. Re-applies the clip's persisted label.
 def spawn-for-clip [cid: string]: nothing -> string {
   let cmd = $env.GHOSTTY_WEB_NU_CMD? | default "nu"
   let sid = if $cmd == "nu" { pty open --embedded } else { pty open $cmd }
   pty meta set $sid "clip_id" $cid
+  let lbl = (clip-label $cid)
+  if ($lbl | is-not-empty) { pty meta set $sid "label" $lbl }
   $sid
 }
 
@@ -311,6 +326,9 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       let new = ($signals.label? | default "" | str trim)
       if $sid != "" {
         pty meta set $sid "label" $new
+        # Persist the label on the clip so it survives a respawn.
+        let cid = (try { pty meta get $sid "clip_id" } catch { null })
+        if ($cid | is-not-empty) { set-clip-label $cid $new }
       }
       null | metadata set { merge {'http.response': {status: 204}} }
     }

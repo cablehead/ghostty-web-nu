@@ -1,0 +1,35 @@
+import { chromium } from "playwright-core";
+import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
+const HTTP_NU = "/root/http-nu-pty-projection/target/release/http-nu";
+const SERVE = "/root/ghostty-web-nu-projection/serve-sessions.nu";
+const CHROMIUM = "/root/.cache/ms-playwright/chromium-1181/chrome-linux/chrome";
+const PORT = 5097, BASE = `http://127.0.0.1:${PORT}`, STORE = "/tmp/xs-label";
+rmSync(STORE, { recursive: true, force: true });
+const start = () => spawn(HTTP_NU, ["--datastar","--store",STORE,`127.0.0.1:${PORT}`,SERVE], { stdio:["ignore","pipe","pipe"] });
+const up = async () => { for(let i=0;i<60;i++){ try { if((await fetch(BASE)).ok) return; } catch{} await new Promise(r=>setTimeout(r,100)); } throw 0; };
+let srv = start(); process.on("exit",()=>{try{srv.kill("SIGKILL")}catch{}}); await up();
+const browser = await chromium.launch({ executablePath: CHROMIUM, headless: true });
+let page = await (await browser.newContext({viewport:{width:1100,height:600}})).newPage();
+await page.goto(BASE);
+await page.waitForFunction(()=>document.querySelectorAll('#sessions-list li').length>=1 && document.getElementById('grid')?.dataset.cols,{timeout:8000});
+await new Promise(r=>setTimeout(r,600));
+const label = (pg) => pg.evaluate(()=>document.querySelector('#sessions-list li.selected .row')?.firstChild?.textContent?.trim());
+console.log("initial label:", await label(page));
+// Rename via Alt+R, clear, type MYTERM, Enter
+await page.keyboard.press('Alt+r');
+await new Promise(r=>setTimeout(r,400));
+await page.evaluate(()=>{ const i=document.querySelector('.modal-input'); i.value=''; });
+await page.keyboard.type('MYTERM');
+await page.keyboard.press('Enter');
+await new Promise(r=>setTimeout(r,500));
+console.log("after rename label:", await label(page));
+await page.close();
+// restart
+srv.kill("SIGKILL"); await new Promise(r=>setTimeout(r,500)); srv = start(); await up();
+page = await (await browser.newContext({viewport:{width:1100,height:600}})).newPage();
+await page.goto(BASE);
+await page.waitForFunction(()=>document.querySelectorAll('#sessions-list li').length>=1,{timeout:8000});
+await new Promise(r=>setTimeout(r,800));
+console.log("after RESTART label (want MYTERM):", await label(page));
+await browser.close(); process.exit(0);
