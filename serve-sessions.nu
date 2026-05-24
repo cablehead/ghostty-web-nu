@@ -1,7 +1,10 @@
 # ghostty-web-nu sessions: server-projected 2-pane UI.
 #
 # Run:
-#   http-nu --datastar :5003 ~/ghostty-web-nu/serve-sessions.nu
+#   http-nu --datastar --store ./store :5003 ~/ghostty-web-nu/serve-sessions.nu
+#
+# --store is required: durable UI state (title, per-tab canvas, last-focused
+# sid) lives in the xs event log, not http-nu's in-memory `stor`.
 #
 # Endpoints:
 #   GET  /                  -> static sessions.html shell
@@ -20,86 +23,54 @@ use http-nu/datastar *
 
 const STATIC = (path self | path dirname | path join "www")
 
-# One title per http-nu instance, shown in every tab's <title>. Held in
-# http-nu's in-memory SQLite (`stor`) so it survives SSE reconnects within a
-# server run; cleared on restart. First read seeds a random adj-noun so the
-# three-tabs-at-three-hosts case starts out distinguishable without any user
-# action.
+# Durable UI state lives in the xs store (run with `--store ./store`), not
+# `stor`. Each concern is a topic; the latest frame wins. This is the first
+# step toward modelling sessions as clips in a stack (see ADR direction):
+# the title becomes a stack property, canvases and focus become frames.
 const TITLE_ADJ = [calm bold brave bright crisp eager fierce gentle happy keen lucky merry quiet swift wild]
 const TITLE_NOUN = [otter sparrow fox heron stag panda lynx hare badger marten falcon ferret weasel mink]
 
-def ensure-title-table []: nothing -> nothing {
-  let exists = (stor open
-    | query db "select name from sqlite_master where type='table' and name='title'"
-    | length) > 0
-  if not $exists {
-    stor create -t title -c {val: str} | ignore
-    let t = $"($TITLE_ADJ | shuffle | first)-($TITLE_NOUN | shuffle | first)"
-    stor insert -t title -d {val: $t} | ignore
-  }
-}
-
+# Window title: one evolving value as `ghostty.title` frames; latest wins.
+# First read with no frame seeds a random adj-noun and persists it, so
+# multiple hosts start out distinguishable.
 def load-title []: nothing -> string {
-  ensure-title-table
-  stor open | query db "select val from title limit 1" | get 0.val
+  let f = (.last "ghostty.title")
+  if ($f | is-empty) {
+    let t = $"($TITLE_ADJ | shuffle | first)-($TITLE_NOUN | shuffle | first)"
+    save-title $t
+    $t
+  } else {
+    $f.meta.val
+  }
 }
 
 def save-title [new: string]: nothing -> nothing {
-  ensure-title-table
-  stor update -t title -u {val: $new} | ignore
+  null | .append "ghostty.title" --meta {val: $new} --ttl forever | ignore
 }
 
-# Per-tab canvas pane content. Keyed by sid; in-memory SQLite so it survives
-# page refresh / SSE reconnect but not server restart (same lifetime as the
-# title and any other `stor` state). Closed tabs leave rows behind until the
-# server restarts -- harmless given the in-memory scope.
-def ensure-canvas-table []: nothing -> nothing {
-  let exists = (stor open
-    | query db "select name from sqlite_master where type='table' and name='canvas'"
-    | length) > 0
-  if not $exists {
-    stor create -t canvas -c {sid: str, html: str} | ignore
-  }
-}
-
+# Per-tab canvas content: `ghostty.canvas` frames keyed by meta.sid, body is
+# the HTML (empty body = cleared). The latest frame for a sid wins.
 def load-canvas [sid: string]: nothing -> string {
   if $sid == "" { return "" }
-  ensure-canvas-table
-  let r = (stor open | query db "select html from canvas where sid = :sid" --params {sid: $sid})
-  if ($r | is-empty) { "" } else { $r | get 0.html }
+  let f = (.cat | where {|f| $f.topic == "ghostty.canvas" and (($f.meta.sid? | default "") == $sid) } | last)
+  if ($f | is-empty) { return "" }
+  if ($f.hash? | is-empty) { "" } else { (.cas $f.hash) }
 }
 
 def save-canvas [sid: string, html: string]: nothing -> nothing {
   if $sid == "" { return }
-  ensure-canvas-table
-  stor open | query db "delete from canvas where sid = :sid" --params {sid: $sid} | ignore
-  if $html != "" {
-    stor insert -t canvas -d {sid: $sid, html: $html} | ignore
-  }
+  $html | .append "ghostty.canvas" --meta {sid: $sid} --ttl forever | ignore
 }
 
-# Last sid the user navigated to. Stored so out-of-process callers (curl,
-# editor extensions) can post to /canvas without having to know the sid --
-# their post lands on whichever tab is currently in front. Updated in POST
-# /nav and POST /pty/new; one-row table same shape as the title.
-def ensure-focused-table []: nothing -> nothing {
-  let exists = (stor open
-    | query db "select name from sqlite_master where type='table' and name='focused'"
-    | length) > 0
-  if not $exists {
-    stor create -t focused -c {sid: str} | ignore
-    stor insert -t focused -d {sid: ""} | ignore
-  }
-}
-
+# Last sid the user navigated to, so out-of-process /canvas posters land on
+# whichever tab is in front. `ghostty.focused` frames; latest wins.
 def load-focused-sid []: nothing -> string {
-  ensure-focused-table
-  stor open | query db "select sid from focused limit 1" | get 0.sid
+  let f = (.last "ghostty.focused")
+  if ($f | is-empty) { "" } else { ($f.meta.sid? | default "") }
 }
 
 def save-focused-sid [sid: string]: nothing -> nothing {
-  ensure-focused-table
-  stor update -t focused -u {sid: $sid} | ignore
+  null | .append "ghostty.focused" --meta {sid: $sid} --ttl forever | ignore
 }
 
 # Render the left-pane session list as plain HTML. Returns a string suitable

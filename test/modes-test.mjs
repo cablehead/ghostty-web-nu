@@ -4,7 +4,7 @@ const HTTP_NU = "/root/http-nu-pty-projection/target/release/http-nu";
 const SERVE = "/root/ghostty-web-nu-projection/serve-sessions.nu";
 const CHROMIUM = "/root/.cache/ms-playwright/chromium-1181/chrome-linux/chrome";
 const PORT = 5098, BASE = `http://127.0.0.1:${PORT}`;
-const srv = spawn(HTTP_NU, ["--datastar", `127.0.0.1:${PORT}`, SERVE], { stdio: ["ignore","pipe","pipe"] });
+const srv = spawn(HTTP_NU, ["--datastar", "--store", "/tmp/xs-"+PORT, `127.0.0.1:${PORT}`, SERVE], { stdio: ["ignore","pipe","pipe"] });
 process.on("exit", () => { try { srv.kill("SIGKILL"); } catch {} });
 for (let i=0;i<50;i++){ try { if ((await fetch(BASE)).ok) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
 const browser = await chromium.launch({ executablePath: CHROMIUM, headless: true });

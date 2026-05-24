@@ -4,8 +4,7 @@ const HTTP_NU = "/root/http-nu-pty-projection/target/release/http-nu";
 const SERVE = "/root/ghostty-web-nu-projection/serve-sessions.nu";
 const CHROMIUM = "/root/.cache/ms-playwright/chromium-1181/chrome-linux/chrome";
 const PORT = 5098, BASE = `http://127.0.0.1:${PORT}`;
-const srv = spawn(HTTP_NU, ["--datastar", `127.0.0.1:${PORT}`, SERVE], { stdio: ["ignore","pipe","pipe"] });
-const log = []; srv.stdout.on("data",b=>log.push(b.toString())); srv.stderr.on("data",b=>log.push(b.toString()));
+const srv = spawn(HTTP_NU, ["--datastar", "--store", "/tmp/xs-"+PORT, `127.0.0.1:${PORT}`, SERVE], { stdio: ["ignore","pipe","pipe"] });
 process.on("exit", () => { try { srv.kill("SIGKILL"); } catch {} });
 for (let i=0;i<50;i++){ try { if ((await fetch(BASE)).ok) break; } catch {} await new Promise(r=>setTimeout(r,100)); }
 const browser = await chromium.launch({ executablePath: CHROMIUM, headless: true });
@@ -13,57 +12,40 @@ const page = await (await browser.newContext({ viewport:{width:1200,height:700} 
 page.on("pageerror", e => console.log("[err]", e.message));
 
 await page.goto(BASE);
-// Wait for the sidebar to render a session and the grid to get content.
 await page.waitForFunction(() => {
-  const li = document.querySelectorAll('#sessions-list li').length;
-  const cols = document.getElementById('grid')?.dataset.cols;
-  return li >= 1 && cols;
+  return document.querySelectorAll('#sessions-list li').length >= 1 && document.getElementById('grid')?.dataset.cols;
 }, { timeout: 8000 });
 await new Promise(r=>setTimeout(r,700));
 
-async function snap(label) {
-  const i = await page.evaluate(() => {
-    const sel = document.querySelector('#sessions-list li.selected .row');
-    return {
-      sessions: document.querySelectorAll('#sessions-list li').length,
-      selectedSidAttr: document.getElementById('screen').dataset.sid?.slice(0,8),
-      gridCols: document.getElementById('grid').dataset.cols,
-      gridRows: document.getElementById('grid').dataset.rows,
-      statusDims: document.querySelector('.statusbar span:last-child').textContent,
-      gridHasPrompt: [...document.querySelectorAll('#grid .row')].some(r => r.textContent.includes('$')),
-    };
-  });
-  console.log(label, JSON.stringify(i));
-  return i;
-}
-const s1 = await snap("initial");
+const gridText = () => page.evaluate(() => document.getElementById('grid').textContent);
+const sessions = () => page.evaluate(() => document.querySelectorAll('#sessions-list li').length);
+const focus = async () => { await page.keyboard.press('Enter'); await new Promise(r=>setTimeout(r,200)); };
+const nav = async () => { await page.keyboard.press('Alt+Escape'); await new Promise(r=>setTimeout(r,200)); };
 
-// Type a marker into the focused session
+console.log("initial sessions:", await sessions());
+
+// Focus tab one, type a marker
+await focus();
 await page.keyboard.type('echo TAB_ONE');
 await page.keyboard.press('Enter');
 await new Promise(r=>setTimeout(r,600));
-const afterType = await page.evaluate(() =>
-  [...document.querySelectorAll('#grid .row')].some(r => r.textContent.includes('TAB_ONE')));
-console.log("typed TAB_ONE visible:", afterType);
+console.log("TAB_ONE visible in tab one:", (await gridText()).includes('TAB_ONE'));
 
-// Alt+T -> new session
+// Back to navigate, new session via Alt+T
+await nav();
+const s1 = await sessions();
 await page.keyboard.press('Alt+t');
-await page.waitForFunction((prev) => document.querySelectorAll('#sessions-list li').length > prev, s1.sessions, { timeout: 5000 });
+await page.waitForFunction((p) => document.querySelectorAll('#sessions-list li').length > p, s1, { timeout: 5000 });
 await new Promise(r=>setTimeout(r,700));
-const s2 = await snap("after Alt+T");
+console.log("after Alt+T sessions:", await sessions());
 
-// The new session should be selected and NOT show TAB_ONE
-const tabTwoFresh = await page.evaluate(() =>
-  ![...document.querySelectorAll('#grid .row')].some(r => r.textContent.includes('TAB_ONE')));
-console.log("new tab is fresh (no TAB_ONE):", tabTwoFresh);
+// New tab should be fresh (no TAB_ONE)
+console.log("new tab fresh (no TAB_ONE):", !(await gridText()).includes('TAB_ONE'));
 
-// Alt+K -> previous session (back to tab one), should show TAB_ONE again
+// Back to tab one via Alt+K; TAB_ONE should reappear (per-session scrollback)
 await page.keyboard.press('Alt+k');
 await new Promise(r=>setTimeout(r,700));
-const backToOne = await page.evaluate(() =>
-  [...document.querySelectorAll('#grid .row')].some(r => r.textContent.includes('TAB_ONE')));
-console.log("Alt+K back to tab one shows TAB_ONE:", backToOne);
+console.log("Alt+K back to tab one shows TAB_ONE:", (await gridText()).includes('TAB_ONE'));
 
 await browser.close();
-process.on("exit", () => process.stdout.write(log.join("")));
 process.exit(0);
