@@ -20,46 +20,57 @@ Two hard constraints shape the space:
 
 ## Decision
 
-App chords use **`Alt`** (Option on macOS) and are **scoped to navigate
-mode**. The capture-phase keymap handler only consults the keymap in navigate
-mode; in focus mode it honors a single escape chord and lets everything else
-reach the pty.
+App chords use **`Alt`** (Option on macOS) and fire in **every mode** --
+navigate, a focused terminal, or while editing a note. The capture-phase
+keymap handler consults the `Alt` keymap regardless of mode and
+`stopPropagation`s a match so it never also reaches the focused pty via
+key-buffer. Non-`Alt` keys stay context-scoped: a focused terminal forwards
+them to the pty, a note's textarea owns them (Enter = newline, Esc = end
+edit), and navigate honors the non-`Alt` keymap (Enter = focus).
 
-- **`Alt` is the app modifier.** It's largely free of browser/OS reservation,
-  and it's the one modifier the terminal layer can cleanly cede in navigate
-  mode. `Cmd`/`Ctrl` are left to the browser/OS and to TUIs.
+- **`Alt` is the app modifier.** It's largely free of browser/OS reservation.
+  Making the `Alt` chords global means clip management (new/close/cycle/
+  rename/width) never requires first leaving a focused pane -- you can
+  `Alt+J`/`Alt+K` straight from one focused terminal into the next. The cost
+  is that the terminal layer no longer sees `Alt`+letter (some TUIs use
+  Meta-bindings); we accept that for the seamless management flow, and
+  `Cmd`/`Ctrl` are still left entirely to the browser/OS and to TUIs.
+- **Selection carries focus.** In focus mode, moving the selection (`Alt+J`/
+  `Alt+K`, or clicking a sidebar clip) auto-focuses the newly selected pane:
+  a terminal gets key-buffer/pty, a note opens its editor. Navigate mode
+  never auto-focuses -- it's read-only browsing.
 - **`Alt+Esc` is the focus->navigate escape.** Plain `Esc` goes to the pty;
-  `Alt+Esc` is the one chord honored in focus mode.
+  `Alt+Esc` drops focus from any mode.
 - **macOS Option produces glyphs** (Option+O -> "o-slash"). `comboKey`
   normalizes via `e.code` (`KeyO` -> `o`) and the handlers `preventDefault`,
   so detection is consistent across Chrome/Firefox/Safari and nothing gets
   typed. Any new `Alt+letter` chord inherits this for free.
 - **Safety bar for a new chord:** must not be a default browser accelerator
   in Chrome/Firefox/Safari, must be detectable via `e.code` under Option, and
-  must be a navigate-mode action (not something you'd want mid-terminal).
-  `Alt+letter` combos clear this; bare `Alt` taps (Firefox/Windows menu bar)
-  do not.
+  (since `Alt` chords are now global) must be an action you're willing to
+  shadow from a focused TUI. `Alt+letter` combos clear the first two; bare
+  `Alt` taps (Firefox/Windows menu bar) do not.
 
 ### Current chords
 
-Navigate mode:
+App chords (fire in any mode):
 
 | Chord         | Action                         |
 | ------------- | ------------------------------ |
-| `Alt+T`       | New session                    |
-| `Alt+D`       | Close current session          |
-| `Alt+J`/`Alt+K` | Next / previous session      |
+| `Alt+T`       | New clip (note/terminal picker)|
+| `Alt+D`       | Close current clip             |
+| `Alt+J`/`Alt+K` | Next / previous clip         |
 | `Alt+R`       | Rename current tab             |
 | `Alt+Shift+R` | Rename window title            |
 | `Alt+O`       | Cycle current pane width       |
-| `Enter`       | Focus the selected pane        |
 
-Focus mode:
+Mode-specific:
 
-| Chord     | Action                         |
-| --------- | ------------------------------ |
-| `Alt+Esc` | Back to navigate mode          |
-| (all else)| forwarded to the focused pty   |
+| Chord     | Mode     | Action                              |
+| --------- | -------- | ----------------------------------- |
+| `Enter`   | navigate | Focus the selected pane             |
+| `Alt+Esc` | focus    | Back to navigate mode               |
+| (non-Alt) | focus    | forwarded to the focused pty / note |
 
 The status bar lists the active mode's chords and they are clickable, so the
 keyspace is also discoverable without this document.
@@ -67,13 +78,13 @@ keyspace is also discoverable without this document.
 ## Consequences
 
 - **New bindings have a recipe:** an unused `Alt+letter`, registered in the
-  navigate keymap + `window.app` action + status-bar binding. Three edits,
-  one row in the table above.
-- **We never compete with the browser or with TUIs**, at the cost of every
-  app chord needing the `Alt` prefix (no single-key navigate actions today;
-  if we want vim-style bare `j`/`k` in navigate mode later, that's a new
-  decision -- navigate mode has key-buffer off, so it's available, but it
-  would diverge from the `Alt`-prefixed set).
+  keymap + `window.app` action + the shared `appChords` status-bar list.
+  Three edits, one row in the table above.
+- **We never compete with the browser**, at the cost of every app chord
+  needing the `Alt` prefix and shadowing `Alt`+letter from focused TUIs. If we
+  want vim-style bare `j`/`k` in navigate mode later, that's a new decision --
+  navigate mode has key-buffer off, so it's available, but it would diverge
+  from the `Alt`-prefixed set.
 - **The table can drift** from the code. Mitigation: the status bar is
   generated from the same actions, so the live UI is the source of truth;
   this table is the rationale + reservation list.
