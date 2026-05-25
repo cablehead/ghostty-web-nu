@@ -49,8 +49,8 @@
     /* Continuous document: every session's terminal stacked vertically, the
        whole column scrolls. Each .pane is a fixed-height live terminal whose
        grid.css #screen-<sid> fills the .pane-screen below its header. */
-    #doc { min-height: 0; overflow-y: auto; overflow-x: hidden; scroll-behavior: smooth; padding: .5rem; display: flex; flex-direction: column; gap: .5rem; }
-    .pane { flex: 0 0 auto; display: flex; flex-direction: column; border: 1px solid var(--pane-border); border-radius: 4px; overflow: hidden; background: var(--term-bg); transition: opacity .12s, border-color .12s; }
+    #doc { min-height: 0; overflow-y: auto; overflow-x: hidden; padding: .5rem; display: flex; flex-direction: column; gap: .5rem; }
+    .pane { flex: 0 0 auto; display: flex; flex-direction: column; border: 1px solid var(--pane-border); border-radius: 4px; overflow: hidden; background: var(--term-bg); transition: opacity .12s, border-color .12s; scroll-margin: .5rem; }
     .pane-head { flex: 0 0 auto; padding: .15rem .6rem; font-size: 11px; color: var(--dim); background: var(--chrome); cursor: pointer; display: flex; gap: .5ch; align-items: baseline; }
     .pane-head small { opacity: .5; }
     /* The terminal viewport. terminal.js sets its height to the row count it
@@ -171,7 +171,11 @@
   <!-- Scroll the active pane into view (stacks-style offset) whenever the
        selection changes. Lives in the static shell so the server never
        morphs it away; data-effect fires on $selectedSid change. -->
-  <div data-effect="window.__onSelect && window.__onSelect($selectedSid)" style="display:none"></div>
+  <!-- Lead with a bare $selectedSid read so Datastar registers it as a
+       dependency even on the first eval, when the deferred module hasn't
+       defined window.__onSelect yet (a `&&` guard would short-circuit
+       before $selectedSid is read, and the effect would never re-run). -->
+  <div data-effect="$selectedSid; window.__onSelect && window.__onSelect($selectedSid)" style="display:none"></div>
 
   <!-- Server-pushed canvas pane. Empty -> collapses to 0 width. -->
   <section id="canvas" class="canvas"></section>
@@ -328,8 +332,12 @@
     const currentSid = () => doc.querySelector('.pane.active')?.dataset.sid || '';
     window.__onSelect = (sid) => {
       if (sid) {
+        // Reveal the selected pane's bottom -- a terminal's prompt and latest
+        // output sit there. block:'end' aligns the pane's bottom to the
+        // viewport bottom (shows the bottom even when the pane is taller than
+        // the viewport); scroll-margin on .pane adds breathing room.
         const pane = doc.querySelector('#pane-' + CSS.escape(sid));
-        if (pane) doc.scrollTop = pane.offsetTop - doc.offsetTop - 2.5 * 17;
+        if (pane) pane.scrollIntoView({ block: 'end' });
       }
       if (mode === 'focus' && !sid) setMode('navigate');
     };
