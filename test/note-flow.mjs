@@ -66,5 +66,14 @@ await new Promise(r=>setTimeout(r,600));
 const persisted = await page.evaluate(()=>document.querySelector('#doc .pane[data-kind="note"] .note-pre')?.textContent);
 console.log("after reload pre:", JSON.stringify(persisted), "| persisted:", persisted===NOTE, "(want true)");
 
+// Re-focusing a note to edit it lands the caret at the end of the text.
+await page.click('#doc .pane[data-kind="note"] .note-body');
+await new Promise(r=>setTimeout(r,300));
+const caret = await page.evaluate(()=>{
+  const ta=document.querySelector('#doc .pane[data-kind="note"] .note-edit');
+  return { focused: document.activeElement===ta, start: ta.selectionStart, end: ta.selectionEnd, len: ta.value.length };
+});
+console.log("caret at end:", caret.focused && caret.start===caret.len && caret.end===caret.len, JSON.stringify(caret));
+
 console.log("[warnings]", log.join("").split("\n").filter(l=>/NoTargetsFound|error/i.test(l)).slice(0,3).join(" | "));
 await browser.close(); process.exit(0);

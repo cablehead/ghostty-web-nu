@@ -540,6 +540,9 @@
           ta.style.display = '';
           if (pre) pre.style.display = 'none';
           ta.focus();
+          // Land the caret at the end so you continue the note where it left
+          // off rather than at the top.
+          ta.setSelectionRange(ta.value.length, ta.value.length);
           growNote(ta);
         }
         setMode('focus');
