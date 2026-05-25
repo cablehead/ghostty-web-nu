@@ -15,6 +15,8 @@ await new Promise(r=>setTimeout(r,600));
 await a.keyboard.press('Enter'); await new Promise(r=>setTimeout(r,200));
 await a.keyboard.type('echo AMARK'); await a.keyboard.press('Enter'); await new Promise(r=>setTimeout(r,500));
 await a.keyboard.press('Alt+Escape'); await a.keyboard.press('Alt+t');
+await a.waitForSelector('.modal-backdrop[data-show] .picker',{state:'visible',timeout:3000}).catch(()=>{});
+await a.click('.picker-row:has-text("Terminal")');
 await a.waitForFunction(()=>document.querySelectorAll('#doc .pane').length>=2,{timeout:5000});
 await new Promise(r=>setTimeout(r,600));
 console.log("A panes:", await a.evaluate(()=>document.querySelectorAll('#doc .pane').length));

@@ -89,15 +89,44 @@ def live-clips []: nothing -> list {
   .cat
   | where {|f| $f.topic == "clip.add" }
   | where {|f| $f.id not-in $deleted }
+  | each {|f| {id: $f.id, type: ($f.meta.type? | default "terminal")} }
 }
 
-def add-clip []: nothing -> string {
-  let f = (null | .append "clip.add" --meta {type: "terminal"} --ttl forever)
+# Add a clip of the given type (terminal | note). A note's initial body
+# (piped in) is CAS-stored on the frame. Returns the new clip id.
+def add-clip [type: string = "terminal"]: any -> string {
+  let body = $in
+  let f = if ($body | is-empty) {
+    null | .append "clip.add" --meta {type: $type} --ttl forever
+  } else {
+    $body | .append "clip.add" --meta {type: $type} --ttl forever
+  }
   $f.id
 }
 
 def delete-clip [cid: string]: nothing -> nothing {
   null | .append "clip.delete" --meta {clip_id: $cid} --ttl forever | ignore
+}
+
+# Note body: the latest CAS body across the clip's add/update frames.
+def note-body [cid: string]: nothing -> string {
+  let f = (.cat
+    | where {|f| ($f.topic == "clip.add" and $f.id == $cid) or ($f.topic == "clip.update" and (($f.meta.clip_id? | default "") == $cid)) }
+    | last)
+  if ($f | is-empty) { "" } else if (($f.hash? | default "") == "") { "" } else { (.cas $f.hash) }
+}
+
+def set-note-body [cid: string, body: string]: nothing -> nothing {
+  $body | .append "clip.update" --meta {clip_id: $cid} --ttl forever | ignore
+}
+
+# Resolve the live pty sid bound to a terminal clip (meta.clip_id tag), or
+# "" if none is alive. The bootstrap respawns one per terminal clip, so a
+# terminal clip normally resolves; a clip whose child exited stays "" until
+# the next reload (zellij-style: placement persists, process respawns).
+def sid-for-clip [cid: string]: nothing -> string {
+  let m = (pty list | where {|p| ($p.meta.clip_id? | default "") == $cid })
+  if ($m | is-empty) { "" } else { $m | first | get sid }
 }
 
 # A clip's label persists as clip.patch {clip_id, label} frames; latest wins.
@@ -128,58 +157,68 @@ def spawn-for-clip [cid: string]: nothing -> string {
 # for `to datastar-patch-elements`. Dimensions live in the bottom-right meta
 # corner of the focused pane (driven by the $focusedDims signal), not the
 # sidebar labels.
-def render-list [ptys: list, selected: string]: nothing -> string {
-  # Sort by most recent input activity. `pty list` seeds last_input_ms to
-  # session creation time and bumps it on every /pty/input write, so a
-  # freshly-spawned tab opens at the top and the tab you most recently
-  # typed in floats up. Re-renders only fire when `pty.events` ticks
-  # (created/closed/resized/meta/touched) or nav happens, so the list
-  # doesn't shuffle mid-keystroke; the "touched" event is emitted from
-  # the Rust side only when a bump actually moves a sid to the top.
-  let items = $ptys | sort-by last_input_ms -r | each {|p|
-    let label = $p.meta.label? | default "nu"
-    let cls = if $p.sid == $selected { "selected" } else { "" }
-    # @post('/nav') sends all $signals as JSON. We set $sid (the target)
-    # before posting so the server knows which session to select.
-    let onclick = $"$sid = '($p.sid)'; @post\('/nav'\)"
-    let onclose = $"@post\('/pty/close?sid=($p.sid)'\)"
-    $"<li class='($cls)'><button type='button' class='row' data-on:click=\"($onclick)\">($label)<small>($p.sid | str substring 0..8)</small></button><button type='button' class='copy' data-sid='($p.sid)' title='Copy sid'><iconify-icon icon='lucide:copy'></iconify-icon></button><button type='button' class='close' data-on:click=\"($onclose)\" title='Close'>×</button></li>"
+def html-escape [s: string]: nothing -> string {
+  $s | str replace -a '&' '&amp;' | str replace -a '<' '&lt;' | str replace -a '>' '&gt;'
+}
+
+# A clip's display label: its set label, else a type default.
+def clip-display-label [c: record]: nothing -> string {
+  let l = (clip-label $c.id)
+  if ($l | is-not-empty) { $l } else if ($c.type == "note") { "note" } else { "nu" }
+}
+
+# Left-pane clip list, in creation order. Selection is keyed by clip id
+# ($selectedSid holds the selected clip's id). Re-rendered on clip.events.
+def render-list [clips: list, selected: string]: nothing -> string {
+  let items = $clips | each {|c|
+    let label = (clip-display-label $c)
+    let cls = if $c.id == $selected { "selected" } else { "" }
+    let icon = if ($c.type == "note") { "lucide:file-text" } else { "lucide:square-terminal" }
+    let onclick = $"$sid = '($c.id)'; @post\('/nav'\)"
+    let onclose = $"@post\('/clip/close?clip=($c.id)'\)"
+    $"<li class='($cls)'><button type='button' class='row' data-on:click=\"($onclick)\"><iconify-icon icon='($icon)' class='row-icon'></iconify-icon>($label)<small>($c.id | str substring 0..8)</small></button><button type='button' class='close' data-on:click=\"($onclose)\" title='Close'>×</button></li>"
   } | str join ""
-  $"<aside id='sessions-list'><header>Sessions <button type='button' class='new-btn' data-on:click=\"@post\('/pty/new'\)\" title='New session'>+</button></header><ul>($items)</ul></aside>"
+  $"<aside id='sessions-list'><header>Clips <button type='button' class='new-btn' data-on:click=\"$picking = true\" title='New clip'>+</button></header><ul>($items)</ul></aside>"
 }
 
-# Render one continuous-document pane for a session. Each pane is a fixed
-# 24-row live terminal: a stable #pane-<sid> wrapper, a header, and a
-# #screen-<sid>/#grid-<sid> whose data-effect opens that session's own view
-# stream (--target so the grids don't collide, nosig so the per-frame
-# signals don't clobber across panes). The active highlight is reactive on
-# the $selectedSid signal, so selection changes need no server patch.
-def render-pane [p: record]: nothing -> string {
-  let sid = $p.sid
-  let label = $p.meta.label? | default "nu"
-  let view = $"@get\('/pty/view?sid=($sid)&target=grid-($sid)&nosig=1', {openWhenHidden: true}\)"
-  # Clicking anywhere on the pane selects it (server nav -> $selectedSid +
-  # highlight) and focuses it. __focusSid points key-buffer at this sid and
-  # enters focus mode immediately, so a keystroke can't land on the
-  # previously-focused pane during the nav round-trip.
-  let onsel = $"$sid = '($sid)'; @post\('/nav'\); window.__focusSid && window.__focusSid\('($sid)'\)"
-  $"<section class='pane' id='pane-($sid)' data-sid='($sid)' data-class:active=\"$selectedSid == '($sid)'\" data-on:click=\"($onsel)\"><header class='pane-head'>($label)<small>($sid | str substring 0..8)</small></header><div id='screen-($sid)' class='pane-screen' data-effect=\"($view)\"><div id='grid-($sid)'></div></div></section>"
+# Render one continuous-document pane for a clip, keyed by clip id. A
+# terminal clip renders a fixed 24-row live grid (view stream by its bound
+# sid, into #grid-<clip>); a note clip renders an editable body (textarea on
+# focus, <pre> otherwise -- managed client-side). The active highlight is
+# reactive on $selectedSid (the selected clip id).
+def render-pane [c: record]: nothing -> string {
+  let cid = $c.id
+  let label = (clip-display-label $c)
+  let head = $"<header class='pane-head'>($label)<small>($cid | str substring 0..8)</small></header>"
+  let onsel = $"$sid = '($cid)'; @post\('/nav'\); window.__focusClip && window.__focusClip\('($cid)'\)"
+  let body = if $c.type == "note" {
+    let txt = (note-body $cid)
+    let esc = (html-escape $txt)
+    $"<div class='note-body'><pre class='note-pre'>($esc)</pre><textarea class='note-edit' spellcheck='false' style='display:none'>($esc)</textarea></div>"
+  } else {
+    let sid = (sid-for-clip $cid)
+    if $sid == "" {
+      "<div class='pane-screen pane-dead'>[exited]</div>"
+    } else {
+      let view = $"@get\('/pty/view?sid=($sid)&target=grid-($cid)&nosig=1', {openWhenHidden: true}\)"
+      $"<div id='screen-($cid)' class='pane-screen' data-sid='($sid)' data-effect=\"($view)\"><div id='grid-($cid)'></div></div>"
+    }
+  }
+  $"<section class='pane' id='pane-($cid)' data-clip='($cid)' data-kind='($c.type)' data-class:active=\"$selectedSid == '($cid)'\" data-on:click=\"($onsel)\">($head)($body)</section>"
 }
 
-# Full continuous document: every session's pane stacked. Used on init; later
-# structural changes are append/remove of single panes so live grids aren't
-# clobbered by a re-render.
-def render-doc [ptys: list]: nothing -> string {
-  let panes = $ptys | sort-by last_input_ms -r | each {|p| render-pane $p } | str join ""
+# Full continuous document, every clip's pane stacked in creation order.
+def render-doc [clips: list]: nothing -> string {
+  let panes = $clips | each {|c| render-pane $c } | str join ""
   $"<div id='doc' class='doc'>($panes)</div>"
 }
 
-# Look up the focused session's "cols x rows" string. Returns "" when no
-# session is selected (or the sid has gone away). Used to drive the
-# $focusedDims signal that the bottom-right meta corner mirrors.
-def focused-dims [ptys: list, selected: string]: nothing -> string {
+# "cols x rows" of the selected clip's terminal, or "" for notes / none.
+def focused-dims [clips: list, selected: string]: nothing -> string {
   if $selected == "" { return "" }
-  let p = $ptys | where sid == $selected | first
+  let sid = (sid-for-clip $selected)
+  if $sid == "" { return "" }
+  let p = pty list | where sid == $sid | first
   if $p == null { "" } else { $"($p.cols)x($p.rows)" }
 }
 
@@ -209,29 +248,25 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       let doc_ready = ($signals.docReady? | default false)
 
       # Bootstrap. If the pty map is empty (fresh server start), respawn a
-      # pty for every live clip so terminals come back where they were; if
-      # there are no clips at all, seed one. Then honor the client's
-      # selection if its sid still exists, else fall back to most-recent.
+      # pty for every live *terminal* clip so they come back where they were;
+      # if there are no clips at all, seed one terminal. Notes need no pty.
+      # Selection is keyed by clip id: honor the requested one if it still
+      # exists, else the first clip.
       if (pty list | is-empty) {
         if (live-clips | is-empty) {
-          spawn-for-clip (add-clip) | ignore
+          spawn-for-clip (add-clip "terminal") | ignore
         } else {
-          for c in (live-clips) { spawn-for-clip $c.id | ignore }
+          for c in (live-clips | where type == "terminal") { spawn-for-clip $c.id | ignore }
         }
       }
-      let bootstrap = (pty list)
-      let live_sids = ($bootstrap | get sid)
-      let initial_sid = if ($requested_sid in $live_sids) {
+      let clips0 = (live-clips)
+      let clip_ids = ($clips0 | get id)
+      let initial_sel = if ($requested_sid in $clip_ids) {
         $requested_sid
       } else {
-        # Hard refresh loses $selectedSid (datastar signals reset to defaults).
-        # Fall back to the most-recently-active session so a refresh lands on
-        # the tab the user was last typing in, not whichever sid hashed first.
-        $bootstrap | sort-by last_input_ms -r | first | get sid
+        $clips0 | get id? | get 0? | default ""
       }
-      # Seed the focused sid table so out-of-process POST /canvas has a
-      # default target even before the user clicks a sidebar row.
-      save-focused-sid $initial_sid
+      save-focused-sid $initial_sel
 
       # Build a single stream: a synthetic init event first, then bus events
       # tagged by kind. (Using `prepend` rather than `append` so we don't
@@ -239,7 +274,7 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       # eagerly drained by `interleave`'s schedulers, which would never
       # yield until something hits the bus.)
       (interleave
-        { .bus sub "pty.events" | each {|e| {kind: "pty", val: $e.value}} }
+        { .bus sub "clip.events" | each {|e| {kind: "clip", val: $e.value}} }
         { .bus sub "nav.events"
             | where {|e| ($e.value.connId? | default "") == $conn_id}
             | each {|e| {kind: "nav", val: $e.value}} }
@@ -249,17 +284,17 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
         { .bus sub "canvas.events" | each {|e| {kind: "canvas", val: $e.value}} })
       | prepend {kind: "init", val: {}}
       | generate {|ev, state|
-          let live = (pty list)
-          let live_sids = $live | get sid
+          let live = (live-clips)
+          let live_ids = $live | get id
           # 1. Nav explicitly requested -- honor it.
-          # 2. Otherwise, if our currently-selected sid disappeared (close /
-          #    death), fall back to the first remaining sid (or "" for none).
+          # 2. Otherwise, if our currently-selected clip disappeared (close),
+          #    fall back to the first remaining clip (or "" for none).
           let new_sel = if $ev.kind == "nav" {
             $ev.val.sid
-          } else if ($state.sel in $live_sids) {
+          } else if ($state.sel in $live_ids) {
             $state.sel
           } else {
-            $live | get sid? | get 0? | default ""
+            $live | get id? | get 0? | default ""
           }
           let new_dims = (focused-dims $live $new_sel)
           let new_title = if $ev.kind == "title" { $ev.val.title } else { $state.title }
@@ -312,17 +347,17 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
           # is reactive (data-class on $selectedSid), so nav needs no patch.
           let doc_patch = if ($ev.kind == "init" and (not $doc_ready)) {
             (render-doc $live | to datastar-patch-elements --selector "#doc")
-          } else if ($ev.kind == "pty" and ($ev.val.event? == "created")) {
-            let p = ($live | where sid == ($ev.val.sid? | default "") | get 0?)
-            if $p == null { null } else {
-              (render-pane $p | to datastar-patch-elements --selector "#doc" --mode "append")
+          } else if ($ev.kind == "clip" and ($ev.val.event? == "added")) {
+            let c = ($live | where id == ($ev.val.clip_id? | default "") | get 0?)
+            if $c == null { null } else {
+              (render-pane $c | to datastar-patch-elements --selector "#doc" --mode "append")
             }
-          } else if ($ev.kind == "pty" and (($ev.val.event? | default "") in ["died" "deleted"])) {
-            ("<span></span>" | to datastar-patch-elements --selector $"#pane-($ev.val.sid)" --mode "remove")
+          } else if ($ev.kind == "clip" and (($ev.val.event? | default "") == "deleted")) {
+            ("<span></span>" | to datastar-patch-elements --selector $"#pane-($ev.val.clip_id)" --mode "remove")
           } else { null }
           let out = ([$sel_patch $dims_patch $title_patch $list_patch $canvas_patch $doc_patch] | where {|x| $x != null})
           {out: $out, next: {sel: $new_sel, dims: $new_dims, title: $new_title, canvas: $new_canvas}}
-        } {sel: $initial_sid, dims: "", title: (load-title), canvas: (load-canvas $initial_sid)}
+        } {sel: $initial_sel, dims: "", title: (load-title), canvas: (load-canvas $initial_sel)}
       | flatten
       | to sse
       | metadata set --content-type "text/event-stream"
@@ -339,15 +374,45 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       null | metadata set { merge {'http.response': {status: 204}} }
     }
 
-    [POST, "/pty/new"] => {
-      # Record a durable terminal clip, spawn a pty bound to it, and select
-      # it for the requesting connection. The `pty open` publishes
-      # `pty.events {event: created}` so every connected /sse sees the new
-      # row appear in the list.
+    [POST, "/clip/new"] => {
+      # Create a clip of ?type= (note | terminal), append its pane to every
+      # connected doc (clip.events added), and select it for this connection.
+      # A terminal also gets a freshly-spawned pty bound to it; a note lands
+      # focused in its editable textarea (client-side, on select).
       let signals = $body | from datastar-signals $req
-      let sid = (spawn-for-clip (add-clip))
-      save-focused-sid $sid
-      {connId: ($signals.connId? | default ""), sid: $sid} | .bus pub "nav.events"
+      let type = ($req.query.type? | default "note")
+      let cid = if $type == "terminal" {
+        let c = (add-clip "terminal")
+        spawn-for-clip $c | ignore
+        $c
+      } else {
+        "" | add-clip "note"
+      }
+      save-focused-sid $cid
+      {event: "added", clip_id: $cid} | .bus pub "clip.events"
+      {connId: ($signals.connId? | default ""), sid: $cid} | .bus pub "nav.events"
+      null | metadata set { merge {'http.response': {status: 204}} }
+    }
+
+    [POST, "/clip/update"] => {
+      # Persist a note's body (clip.update -> CAS). Body is the raw textarea
+      # contents; sent on blur.
+      let cid = ($req.query.clip? | default "")
+      let body = ($body | default "")
+      if $cid != "" { set-note-body $cid $body }
+      null | metadata set { merge {'http.response': {status: 204}} }
+    }
+
+    [POST, "/clip/close"] => {
+      # Tombstone the clip (won't respawn) and, if it's a terminal, kill its
+      # pty. Broadcast clip.events deleted so every doc drops the pane.
+      let cid = ($req.query.clip? | default "")
+      if $cid != "" {
+        let sid = (sid-for-clip $cid)
+        if $sid != "" { pty close $sid }
+        delete-clip $cid
+        {event: "deleted", clip_id: $cid} | .bus pub "clip.events"
+      }
       null | metadata set { merge {'http.response': {status: 204}} }
     }
 
@@ -371,14 +436,17 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       # meta}` ping, which the /sse handler already re-renders the list on.
       # No connId filtering needed -- the list is server-projected (button
       # text), not an input the typer is focused on.
+      # $selectedSid is the selected clip id. Persist the label on the clip
+      # (survives respawn) and mirror onto the live pty's meta if it's a
+      # terminal with a bound pty. A clip.events ping re-renders the list.
       let signals = $body | from datastar-signals $req
-      let sid = ($signals.selectedSid? | default "")
+      let cid = ($signals.selectedSid? | default "")
       let new = ($signals.label? | default "" | str trim)
-      if $sid != "" {
-        pty meta set $sid "label" $new
-        # Persist the label on the clip so it survives a respawn.
-        let cid = (try { pty meta get $sid "clip_id" } catch { null })
-        if ($cid | is-not-empty) { set-clip-label $cid $new }
+      if $cid != "" {
+        set-clip-label $cid $new
+        let sid = (sid-for-clip $cid)
+        if $sid != "" { pty meta set $sid "label" $new }
+        {event: "labeled", clip_id: $cid} | .bus pub "clip.events"
       }
       null | metadata set { merge {'http.response': {status: 204}} }
     }
@@ -434,17 +502,6 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       }
     }
 
-    [POST, "/pty/create"] => {
-      let cfg = $body | from json
-      let cmd = $env.GHOSTTY_WEB_NU_CMD? | default "nu"
-      let sid = if $cmd == "nu" {
-        pty open --embedded --cols ($cfg.cols? | default 80) --rows ($cfg.rows? | default 24)
-      } else {
-        pty open $cmd --cols ($cfg.cols? | default 80) --rows ($cfg.rows? | default 24)
-      }
-      {sid: $sid, cmd: $cmd}
-    }
-
     [POST, "/pty/input"] => {
       $body | pty write $req.query.sid
       null | metadata set { merge {'http.response': {status: 204}} }
@@ -472,15 +529,6 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
         pty view $sid --target $target
         | metadata set --content-type "text/event-stream"
       }
-    }
-
-    [POST, "/pty/close"] => {
-      # Tombstone the clip so it won't respawn, then kill the pty.
-      let sid = $req.query.sid
-      let cid = (try { pty meta get $sid "clip_id" } catch { null })
-      if ($cid | is-not-empty) { delete-clip $cid }
-      pty close $sid
-      null | metadata set { merge {'http.response': {status: 204}} }
     }
 
     _ => {

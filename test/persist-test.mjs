@@ -25,8 +25,10 @@ await new Promise(r=>setTimeout(r,600));
 const sessions = (pg) => pg.evaluate(() => document.querySelectorAll('#sessions-list li').length);
 console.log("fresh start sessions:", await sessions(page));
 
-// Make a second session (Alt+T from navigate)
+// Make a second session (Alt+T opens the picker; choose Terminal)
 await page.keyboard.press('Alt+t');
+await page.waitForSelector('.modal-backdrop[data-show] .picker', { state:'visible', timeout:3000 }).catch(()=>{});
+await page.click('.picker-row:has-text("Terminal")');
 await page.waitForFunction(() => document.querySelectorAll('#sessions-list li').length >= 2, { timeout: 5000 });
 console.log("after Alt+T sessions:", await sessions(page));
 

@@ -11,8 +11,14 @@ const pg=await(await br.newContext({viewport:{width:1000,height:600}})).newPage(
 pg.on("pageerror",e=>console.log("[err]",e.message));
 await pg.goto(B); await pg.waitForFunction(()=>document.querySelector('#doc .pane [data-cols]'),{timeout:8000});
 await new Promise(r=>setTimeout(r,500));
-// 4 panes total (each ~432px, viewport 600 -> overflows)
-for(let i=0;i<3;i++){ await pg.keyboard.press('Alt+t'); await new Promise(r=>setTimeout(r,500)); }
+// 4 panes total (each ~432px, viewport 600 -> overflows). Alt+T opens the
+// type picker; click Terminal each time.
+for(let i=0;i<3;i++){
+  await pg.keyboard.press('Alt+t');
+  await pg.waitForSelector('.modal-backdrop[data-show] .picker',{state:'visible',timeout:3000}).catch(()=>{});
+  await pg.click('.picker-row:has-text("Terminal")');
+  await new Promise(r=>setTimeout(r,500));
+}
 await new Promise(r=>setTimeout(r,500));
 const n = await pg.evaluate(()=>document.querySelectorAll('#doc .pane').length);
 console.log("panes:", n);
@@ -22,7 +28,7 @@ async function check(label){
     const a=document.querySelector('#doc .pane.active'); const d=document.getElementById('doc');
     if(!a) return {none:true};
     const ar=a.getBoundingClientRect(), dr=d.getBoundingClientRect();
-    return { sid:a.dataset.sid.slice(-5), bottomVisible: ar.bottom<=dr.bottom+2, topVisible: ar.top>=dr.top-2 };
+    return { clip:a.dataset.clip.slice(-5), bottomVisible: ar.bottom<=dr.bottom+2, topVisible: ar.top>=dr.top-2 };
   });
   console.log(label, JSON.stringify(r));
 }

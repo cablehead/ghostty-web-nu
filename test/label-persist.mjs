@@ -14,7 +14,14 @@ let page = await (await browser.newContext({viewport:{width:1100,height:600}})).
 await page.goto(BASE);
 await page.waitForFunction(()=>document.querySelectorAll('#sessions-list li').length>=1 && document.querySelector('#doc .pane [data-cols]'),{timeout:8000});
 await new Promise(r=>setTimeout(r,600));
-const label = (pg) => pg.evaluate(()=>document.querySelector('#sessions-list li.selected .row')?.firstChild?.textContent?.trim());
+// The label is the text node after the row's leading <iconify-icon> (and
+// before the clip-id <small>), so read that node rather than firstChild.
+const label = (pg) => pg.evaluate(()=>{
+  const row = document.querySelector('#sessions-list li.selected .row');
+  if (!row) return null;
+  const t = [...row.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+  return t ? t.textContent.trim() : null;
+});
 console.log("initial label:", await label(page));
 // Rename via Alt+R, clear, type MYTERM, Enter
 await page.keyboard.press('Alt+r');

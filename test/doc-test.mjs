@@ -20,18 +20,20 @@ const panes = ()=>page.evaluate(()=>document.querySelectorAll('#doc .pane').leng
 const liveGrids = ()=>page.evaluate(()=>[...document.querySelectorAll('#doc .pane')].filter(p=>p.textContent.includes('$')).length);
 console.log("initial panes:", await panes(), "live(with prompt):", await liveGrids());
 
-// New session -> 2 panes, both live
+// Alt+T opens the type picker; choosing Terminal spawns a new terminal clip.
 await page.keyboard.press('Alt+t');
+await page.waitForSelector('.modal-backdrop[data-show] .picker', {state:'visible', timeout:3000}).catch(()=>{});
+await page.click('.picker-row:has-text("Terminal")');
 await page.waitForFunction(()=>document.querySelectorAll('#doc .pane').length>=2,{timeout:5000});
 await new Promise(r=>setTimeout(r,900));
-console.log("after Alt+T panes:", await panes(), "live:", await liveGrids());
+console.log("after Alt+T->Terminal panes:", await panes(), "live:", await liveGrids());
 
 // Focus the selected pane, type -> should land in the active pane's pty
-const activeSid = await page.evaluate(()=>document.querySelector('#doc .pane.active')?.dataset.sid);
+const activeSid = await page.evaluate(()=>document.querySelector('#doc .pane.active .pane-screen')?.dataset.sid);
 console.log("active sid:", activeSid?.slice(0,8));
 await page.keyboard.press('Enter'); // focus
 await new Promise(r=>setTimeout(r,200));
-console.log("mode after Enter:", await page.evaluate(()=>document.getElementById('mode-badge').textContent));
+console.log("mode after Enter:", await page.evaluate(()=>document.getElementById('status-mode').textContent));
 await page.keyboard.type('echo DOCMARK');
 await page.keyboard.press('Enter');
 await new Promise(r=>setTimeout(r,600));
@@ -44,7 +46,7 @@ console.log("DOCMARK in active pane:", markIn, "| total panes with DOCMARK (want
 
 await page.keyboard.press('Alt+Escape');
 await new Promise(r=>setTimeout(r,200));
-console.log("mode after Alt+Esc:", await page.evaluate(()=>document.getElementById('mode-badge').textContent));
+console.log("mode after Alt+Esc:", await page.evaluate(()=>document.getElementById('status-mode').textContent));
 
 // Rename from navigate must not leak keys to any pane's pty.
 await page.keyboard.press('Alt+r');
