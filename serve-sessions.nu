@@ -198,6 +198,11 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
       let prior_conn = ($signals.connId? | default "")
       let conn_id = if $prior_conn == "" { random uuid } else { $prior_conn }
       let requested_sid = ($signals.selectedSid? | default "")
+      # docReady is replayed true on a reconnect (tab away/back). When true,
+      # the client already has the panes and their view streams stayed open
+      # (openWhenHidden), so re-rendering #doc would clobber the live grids
+      # with empty ones. Only render the full #doc on a first connect.
+      let doc_ready = ($signals.docReady? | default false)
 
       # Bootstrap. If the pty map is empty (fresh server start), respawn a
       # pty for every live clip so terminals come back where they were; if
@@ -258,7 +263,11 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
             | to datastar-patch-elements --selector "#sessions-list")
           let need_sel = ($ev.kind == "init") or ($new_sel != $state.sel)
           let sel_patch = if $need_sel {
-            ({selectedSid: $new_sel, connId: $conn_id} | to datastar-patch-signals)
+            # Mark docReady on init so a later reconnect replays it and we skip
+            # the #doc re-render (which would clobber the live grids).
+            let base = {selectedSid: $new_sel, connId: $conn_id}
+            let payload = if $ev.kind == "init" { $base | merge {docReady: true} } else { $base }
+            ($payload | to datastar-patch-signals)
           } else { null }
           # Emit the focused-dims signal only when it actually changes so the
           # wire stays quiet during selection-only churn.
@@ -297,7 +306,7 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
           # its pane. Never re-render the whole #doc on other events -- that
           # would morph empty grids over the live ones. Selection highlight
           # is reactive (data-class on $selectedSid), so nav needs no patch.
-          let doc_patch = if $ev.kind == "init" {
+          let doc_patch = if ($ev.kind == "init" and (not $doc_ready)) {
             (render-doc $live | to datastar-patch-elements --selector "#doc")
           } else if ($ev.kind == "pty" and ($ev.val.event? == "created")) {
             let p = ($live | where sid == ($ev.val.sid? | default "") | get 0?)

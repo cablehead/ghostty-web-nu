@@ -124,7 +124,7 @@
   </style>
 </head>
 <body
-  data-signals='{"selectedSid":"","connId":"","sid":"","sel":"","termCols":0,"termRows":0,"termTitle":"","title":{{ title | default("") | tojson | e }},"renaming":false,"renameMode":"title","draft":"","label":""}'
+  data-signals='{"selectedSid":"","connId":"","sid":"","sel":"","termCols":0,"termRows":0,"termTitle":"","title":{{ title | default("") | tojson | e }},"docReady":false,"renaming":false,"renameMode":"title","draft":"","label":""}'
   data-init="@get('/sse')"
   data-effect="document.title = $title || 'ghostty-web-nu sessions'"
   data-actions='{
