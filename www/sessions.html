@@ -13,7 +13,7 @@
     :root {
       --bg: #1d0e2e; --fg: #d4d4d4;
       --pane: #161616; --pane-border: #2a2a2a;
-      --sel: #2a9d4a; --sel-fg: #ffffff; --dim: #888;
+      --sel: #2a9d4a; --sel-blur: #2d4f7c; --sel-fg: #ffffff; --dim: #888;
       --chrome: #252525;
     }
     html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px var(--term-font); }
@@ -26,7 +26,10 @@
     aside li { display: flex; align-items: stretch; border-bottom: 1px solid var(--pane-border); }
     aside li .row { flex: 1; min-width: 0; text-align: left; background: transparent; color: inherit; border: 0; padding: .4rem .75rem; font: inherit; cursor: pointer; overflow: hidden; }
     aside li .row:hover { background: #222; }
-    aside li.selected .row { background: var(--sel); color: var(--sel-fg); }
+    /* Selected tab is blue while merely selected (navigate mode) and green
+       once a terminal is focused -- mirrors the focused/blurred distinction. */
+    aside li.selected .row { background: var(--sel-blur); color: var(--sel-fg); }
+    body.mode-focus aside li.selected .row { background: var(--sel); }
     aside li .close { flex: 0 0 auto; width: 1.75rem; background: transparent; color: inherit; border: 0; padding: 0; font: inherit; cursor: pointer; opacity: 0; transition: opacity .1s; }
     aside li:hover .close, aside li.selected .close { opacity: .6; }
     aside li .close:hover { opacity: 1; color: #ff7676; background: #222; }
@@ -59,7 +62,8 @@
     .pane-screen { flex: 0 0 auto; overflow-y: auto; overflow-x: hidden; background: var(--term-bg); }
     /* The active (selected) pane is highlighted. In navigate mode every pane
        is dimmed (read-only); focus mode lights the active one fully. */
-    .pane.active { border-color: var(--sel); }
+    .pane.active { border-color: var(--sel-blur); }
+    body.mode-focus .pane.active { border-color: var(--sel); }
     body.mode-navigate .pane { opacity: .3; }
     body.mode-navigate .pane.active { opacity: .55; }
     body.mode-focus .pane { opacity: .4; }
@@ -367,6 +371,16 @@
       keybuf.setAttribute('sid', sid);
       setMode('focus');
     };
+
+    // Clicking anywhere outside a terminal pane drops back to navigate mode
+    // (sidebar, topbar, status bar, empty doc area). Clicks inside a pane are
+    // handled by the pane's own focus handler; the rename modal is exempt so
+    // its input keeps working. A pane click bubbles here too, but closest()
+    // catches it and we leave focus alone.
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.pane') || e.target.closest('.modal-backdrop')) return;
+      if (mode === 'focus') setMode('navigate');
+    });
 
     // Combo normalization. macOS substitutes a glyph for e.key when Alt is
     // held (option+d -> the partial-derivative sign); fall back to e.code
