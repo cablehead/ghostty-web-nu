@@ -73,12 +73,24 @@
     .rightbar { background: var(--chrome); }
     .statusbar {
       display: flex; justify-content: space-between; align-items: center;
-      padding: 1rem 2.5rem 1rem .75rem;
+      padding: .4rem 1rem;
       background: var(--chrome); color: var(--fg);
       border-top: 1px solid var(--pane-border);
       font-size: 11px; line-height: 1;
       font-family: var(--term-font);
     }
+    .status-keys { display: flex; gap: .75rem; align-items: center; }
+    .status-mode { text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+    body.mode-focus .status-mode { color: var(--sel); }
+    #status-bindings { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+    .statusbar .binding { display: inline-flex; gap: .4ch; align-items: center; cursor: pointer; opacity: .75; }
+    .statusbar .binding:hover { opacity: 1; }
+    .statusbar .binding kbd {
+      font-family: var(--term-font); font-size: 10px;
+      background: #1c1c1c; border: 1px solid var(--pane-border);
+      border-radius: 3px; padding: 0 .4ch; line-height: 1.4;
+    }
+    .status-meta { display: flex; gap: 1rem; align-items: center; }
     /* Right-side canvas pane. Lives in body's third grid column (`auto`), so
        when :empty the column collapses to 0 and the terminal gets full width.
        Server pushes content via the same /sse stream (canvas.events). */
@@ -160,7 +172,6 @@
         title="Rename (Alt+Shift+R)"
         data-text="$title || 'untitled'"
         data-on:click="$draft = $title; $renameMode = 'title'; $renaming = true"></span>
-      <span class="mode-badge" id="mode-badge">navigate</span>
     </div>
     <!-- Continuous document of session panes. The server fills #doc on init
          and appends/removes panes as sessions come and go; each pane opens
@@ -168,8 +179,14 @@
          reactive via data-class on $selectedSid. -->
     <div id="doc" class="doc"></div>
     <footer class="statusbar" aria-label="Status">
-      <span data-text="$selectedSid ? ('sid ' + $selectedSid.slice(0,8)) : ''"></span>
-      <span data-text="$focusedDims"></span>
+      <!-- Modal status bar: the active mode's name + its clickable key
+           bindings (filled by JS on setMode). Clicking a binding fires the
+           same action a keypress would. -->
+      <span class="status-keys"><span class="status-mode" id="status-mode">navigate</span><span id="status-bindings"></span></span>
+      <span class="status-meta">
+        <span data-text="$focusedDims"></span>
+        <span data-text="$selectedSid ? ('sid ' + $selectedSid.slice(0,8)) : ''" style="opacity:.5;"></span>
+      </span>
     </footer>
   </main>
 
@@ -353,14 +370,49 @@
     // terminal -> key-buffer on, keys route to the pty, and only Alt+Esc
     // (not plain Esc, which TUIs need) returns to navigate.
     const keybuf = document.querySelector('key-buffer');
-    const badge = document.getElementById('mode-badge');
+
+    // Modal status bar. Each mode lists its clickable key bindings in the
+    // footer; clicking one runs the same action the key would. Keys are
+    // ASCII labels (project convention) rather than glyphs.
+    const statusMode = document.getElementById('status-mode');
+    const statusBindings = document.getElementById('status-bindings');
+    const bindingsByMode = {
+      navigate: [
+        { label: 'New', keys: ['Alt', 'T'], run: () => window.app.newSession() },
+        { label: 'Close', keys: ['Alt', 'D'], run: () => window.app.closeSelected() },
+        { label: 'Rename', keys: ['Alt', 'R'], run: () => window.app.openRenameTab() },
+        { label: 'Focus', keys: ['Enter'], run: () => window.app.focus() },
+      ],
+      focus: [
+        { label: 'Navigate', keys: ['Alt', 'Esc'], run: () => setMode('navigate') },
+      ],
+    };
+    function renderBindings(m) {
+      statusMode.textContent = m;
+      statusBindings.replaceChildren();
+      for (const b of (bindingsByMode[m] || [])) {
+        const el = document.createElement('span');
+        el.className = 'binding';
+        const lbl = document.createElement('span');
+        lbl.textContent = b.label;
+        el.appendChild(lbl);
+        for (const k of b.keys) {
+          const kbd = document.createElement('kbd');
+          kbd.textContent = k;
+          el.appendChild(kbd);
+        }
+        el.addEventListener('mousedown', (e) => { e.preventDefault(); b.run(); });
+        statusBindings.appendChild(el);
+      }
+    }
+
     let mode = 'navigate';
     function setMode(m) {
       mode = m;
       document.body.classList.toggle('mode-focus', m === 'focus');
       document.body.classList.toggle('mode-navigate', m === 'navigate');
       keybuf.setAttribute('enabled', m === 'focus' ? 'true' : 'false');
-      badge.textContent = m;
+      renderBindings(m);
     }
     setMode('navigate');
 
@@ -379,7 +431,7 @@
     // its input keeps working. A pane click bubbles here too, but closest()
     // catches it and we leave focus alone.
     document.addEventListener('click', (e) => {
-      if (e.target.closest('.pane') || e.target.closest('.modal-backdrop')) return;
+      if (e.target.closest('.pane') || e.target.closest('.modal-backdrop') || e.target.closest('.statusbar')) return;
       if (mode === 'focus') setMode('navigate');
     });
 
