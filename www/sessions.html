@@ -351,6 +351,15 @@
     }
     setMode('navigate');
 
+    // Click on a pane focuses it: point key-buffer at the clicked sid right
+    // away (the @post('/nav') firing alongside updates $selectedSid a
+    // round-trip later) and enter focus mode so typing lands immediately.
+    window.__focusSid = (sid) => {
+      if (!sid) return;
+      keybuf.setAttribute('sid', sid);
+      setMode('focus');
+    };
+
     // Combo normalization. macOS substitutes a glyph for e.key when Alt is
     // held (option+d -> the partial-derivative sign); fall back to e.code
     // (KeyD -> "d") so alt+letter combos still match.

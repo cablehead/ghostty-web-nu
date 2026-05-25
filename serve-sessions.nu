@@ -158,8 +158,12 @@ def render-pane [p: record]: nothing -> string {
   let sid = $p.sid
   let label = $p.meta.label? | default "nu"
   let view = $"@get\('/pty/view?sid=($sid)&target=grid-($sid)&nosig=1', {openWhenHidden: true}\)"
-  let onsel = $"$sid = '($sid)'; @post\('/nav'\)"
-  $"<section class='pane' id='pane-($sid)' data-sid='($sid)' data-class:active=\"$selectedSid == '($sid)'\"><header class='pane-head' data-on:click=\"($onsel)\">($label)<small>($sid | str substring 0..8)</small></header><div id='screen-($sid)' class='pane-screen' data-effect=\"($view)\"><div id='grid-($sid)'></div></div></section>"
+  # Clicking anywhere on the pane selects it (server nav -> $selectedSid +
+  # highlight) and focuses it. __focusSid points key-buffer at this sid and
+  # enters focus mode immediately, so a keystroke can't land on the
+  # previously-focused pane during the nav round-trip.
+  let onsel = $"$sid = '($sid)'; @post\('/nav'\); window.__focusSid && window.__focusSid\('($sid)'\)"
+  $"<section class='pane' id='pane-($sid)' data-sid='($sid)' data-class:active=\"$selectedSid == '($sid)'\" data-on:click=\"($onsel)\"><header class='pane-head'>($label)<small>($sid | str substring 0..8)</small></header><div id='screen-($sid)' class='pane-screen' data-effect=\"($view)\"><div id='grid-($sid)'></div></div></section>"
 }
 
 # Full continuous document: every session's pane stacked. Used on init; later
