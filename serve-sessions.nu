@@ -407,8 +407,21 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
     }
 
     [GET, "/pty/view"] => {
-      pty view $req.query.sid
-      | metadata set --content-type "text/event-stream"
+      # target: morph-target element id (default 'grid'). nosig: suppress the
+      # global term* signals -- set for continuous-document panes where many
+      # views share the page. No params = single-focused behavior.
+      let sid = $req.query.sid
+      let target = ($req.query.target? | default "grid")
+      let nosig = (($req.query.nosig? | default "") != "")
+      # Pipe directly in each branch: binding the ByteStream to a `let` first
+      # collects the (infinite) stream and hangs.
+      if $nosig {
+        pty view $sid --target $target --no-signals
+        | metadata set --content-type "text/event-stream"
+      } else {
+        pty view $sid --target $target
+        | metadata set --content-type "text/event-stream"
+      }
     }
 
     [POST, "/pty/close"] => {
