@@ -150,7 +150,8 @@
     "prev":      "window.app.cycle(-1)",
     "rename":    "window.app.openRename()",
     "renameTab": "window.app.openRenameTab()",
-    "focus":     "window.app.focus()"
+    "focus":     "window.app.focus()",
+    "cycleWidth":"window.app.cycleWidth()"
   }'
   data-keymap='{
     "enter": "focus",
@@ -159,7 +160,8 @@
     "alt+j": "next",
     "alt+k": "prev",
     "alt+r": "renameTab",
-    "alt+shift+r": "rename"
+    "alt+shift+r": "rename",
+    "alt+o": "cycleWidth"
   }'
 >
   <!-- Server overwrites this on every event. -->
@@ -345,7 +347,22 @@
         // Enter the focused terminal only if one is selected.
         if (currentSid()) setMode('focus');
       },
+      cycleWidth() {
+        // Cycle the active pane's width: full -> narrow -> 24ch -> 2/3 ->
+        // full. terminal.js's ResizeObserver on the pane reflows the pty to
+        // the new width. Width-mode is remembered per sid.
+        const sid = currentSid();
+        if (!sid) return;
+        const pane = doc.querySelector('#pane-' + CSS.escape(sid));
+        if (!pane) return;
+        const sizes = ['', '5ch', '24ch', '66%']; // '' = full (flex stretch)
+        const next = ((widthIdx.get(sid) ?? 0) + 1) % sizes.length;
+        widthIdx.set(sid, next);
+        pane.style.width = sizes[next];
+      },
     };
+    // Per-sid width-cycle index for cycleWidth().
+    const widthIdx = new Map();
 
     // The selected sid, read straight from the active pane (datastar sets
     // .active reactively from $selectedSid). Reading the DOM avoids any race
@@ -381,6 +398,7 @@
         { label: 'New', keys: ['Alt', 'T'], run: () => window.app.newSession() },
         { label: 'Close', keys: ['Alt', 'D'], run: () => window.app.closeSelected() },
         { label: 'Rename', keys: ['Alt', 'R'], run: () => window.app.openRenameTab() },
+        { label: 'Width', keys: ['Alt', 'O'], run: () => window.app.cycleWidth() },
         { label: 'Focus', keys: ['Enter'], run: () => window.app.focus() },
       ],
       focus: [

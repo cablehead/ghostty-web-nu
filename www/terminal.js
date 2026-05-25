@@ -49,7 +49,9 @@ export function mountTerminal({ screen, grid, onResize, fixedRows }) {
     const availW = screen.clientWidth || screen.parentElement?.clientWidth || window.innerWidth;
     const availH = screen.parentElement?.clientHeight || window.innerHeight;
     return {
-      cols: Math.max(20, Math.floor(availW / cell.w)),
+      // Low floor so a deliberately narrow pane (Alt+O width cycle) gets a
+      // correspondingly narrow pty rather than overflowing a clamped width.
+      cols: Math.max(2, Math.floor(availW / cell.w)),
       rows: fixedRows ? fixedRows : Math.max(5, Math.floor(availH / cell.h)),
     };
   }
