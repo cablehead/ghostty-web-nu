@@ -12,7 +12,7 @@ let srv = start(); process.on("exit",()=>{try{srv.kill("SIGKILL")}catch{}}); awa
 const browser = await chromium.launch({ executablePath: CHROMIUM, headless: true });
 let page = await (await browser.newContext({viewport:{width:1100,height:600}})).newPage();
 await page.goto(BASE);
-await page.waitForFunction(()=>document.querySelectorAll('#sessions-list li').length>=1 && document.getElementById('grid')?.dataset.cols,{timeout:8000});
+await page.waitForFunction(()=>document.querySelectorAll('#sessions-list li').length>=1 && document.querySelector('#doc .pane [data-cols]'),{timeout:8000});
 await new Promise(r=>setTimeout(r,600));
 const label = (pg) => pg.evaluate(()=>document.querySelector('#sessions-list li.selected .row')?.firstChild?.textContent?.trim());
 console.log("initial label:", await label(page));

@@ -27,7 +27,7 @@ export async function ensureTermFont() {
  *  Returns { initialDims, syncNow } -- syncNow() forces a re-measure and a
  *  fresh onResize emit (used after a session switch so the newly-focused
  *  pty gets sized to the current pane). */
-export function mountTerminal({ screen, grid, onResize }) {
+export function mountTerminal({ screen, grid, onResize, fixedRows }) {
   function measureCell() {
     const probe = document.createElement('span');
     probe.className = 'cell-probe';
@@ -44,11 +44,13 @@ export function mountTerminal({ screen, grid, onResize }) {
     // Width from the container's content box (clientWidth excludes the
     // reserved scrollbar gutter). Height from the parent so reading it
     // doesn't feed back through the explicit height we set on screen.
+    // With fixedRows the pane is a constant height (continuous-document
+    // panes); otherwise rows fill the available height.
     const availW = screen.clientWidth || screen.parentElement?.clientWidth || window.innerWidth;
     const availH = screen.parentElement?.clientHeight || window.innerHeight;
     return {
       cols: Math.max(20, Math.floor(availW / cell.w)),
-      rows: Math.max(5, Math.floor(availH / cell.h)),
+      rows: fixedRows ? fixedRows : Math.max(5, Math.floor(availH / cell.h)),
     };
   }
 

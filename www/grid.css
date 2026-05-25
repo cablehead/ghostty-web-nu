@@ -53,6 +53,12 @@
   --term-font: 'JetBrainsMonoNerd', monospace;
 }
 
+/* Scrollbars are hidden (see below); content scrolls via wheel/keyboard.
+   That removes the need to reserve a gutter and the "scrollbar eats a
+   column" width math -- the full width is always usable. */
+*::-webkit-scrollbar { display: none; }
+* { scrollbar-width: none; }
+
 #screen {
   position: absolute;
   top: 0;
@@ -64,19 +70,20 @@
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-gutter: stable;
 }
 
-#grid {
+/* The grid root always carries data-cols (single-pane #grid or per-pane
+   #grid-<sid>), so target that rather than a specific id. */
+[data-cols] {
   font-family: var(--term-font);
   font-size: 14px;
   line-height: var(--cell-h);
   white-space: pre;
 }
 
-/* Scoped to #grid: the sessions sidebar also uses a `.row` class for its
+/* Scoped to the grid: the sessions sidebar also uses a `.row` class for its
    tab buttons, and an unscoped height here would clip them to one cell. */
-#grid .row {
+[data-cols] .row {
   display: block;
   height: var(--cell-h);
 }

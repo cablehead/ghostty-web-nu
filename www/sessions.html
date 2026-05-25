@@ -46,14 +46,24 @@
     .title-display { cursor: pointer; padding: 0 .25rem; border-radius: 2px; }
     .title-display:hover { background: #2f2f2f; color: var(--fg); }
     .middle { display: grid; grid-template-columns: 1fr 1ch; min-height: 0; }
-    /* .term-wrap is the positioned ancestor that grid.css's #screen fills
-       (position:absolute; inset). It carries the terminal background so the
-       sub-row remainder below the row-aligned #screen blends in. */
-    .term-wrap { position: relative; min-height: 0; overflow: hidden; background: var(--term-bg); transition: opacity .12s; }
-    /* Navigate mode dims the terminal to signal it's read-only; focus mode
-       (Enter on the terminal) restores it and routes keys to the pty. */
-    body.mode-navigate .term-wrap { opacity: .5; }
-    body.mode-focus .term-wrap { opacity: 1; }
+    /* Continuous document: every session's terminal stacked vertically, the
+       whole column scrolls. Each .pane is a fixed-height live terminal whose
+       grid.css #screen-<sid> fills the .pane-screen below its header. */
+    #doc { min-height: 0; overflow-y: auto; overflow-x: hidden; scroll-behavior: smooth; padding: .5rem; display: flex; flex-direction: column; gap: .5rem; }
+    .pane { flex: 0 0 auto; display: flex; flex-direction: column; border: 1px solid var(--pane-border); border-radius: 4px; overflow: hidden; background: var(--term-bg); transition: opacity .12s, border-color .12s; }
+    .pane-head { flex: 0 0 auto; padding: .15rem .6rem; font-size: 11px; color: var(--dim); background: var(--chrome); cursor: pointer; display: flex; gap: .5ch; align-items: baseline; }
+    .pane-head small { opacity: .5; }
+    /* The terminal viewport. terminal.js sets its height to the row count it
+       wants (fixedRows * cell height), so the pane sizes itself -- no calc,
+       no absolute positioning. Scrollback scrolls within this box. */
+    .pane-screen { flex: 0 0 auto; overflow-y: auto; overflow-x: hidden; background: var(--term-bg); }
+    /* The active (selected) pane is highlighted. In navigate mode every pane
+       is dimmed (read-only); focus mode lights the active one fully. */
+    .pane.active { border-color: var(--sel); }
+    body.mode-navigate .pane { opacity: .6; }
+    body.mode-navigate .pane.active { opacity: .85; }
+    body.mode-focus .pane { opacity: .4; }
+    body.mode-focus .pane.active { opacity: 1; }
     .mode-badge { margin-left: auto; font-size: 11px; color: var(--dim); letter-spacing: .04em; text-transform: uppercase; }
     body.mode-focus .mode-badge { color: var(--sel); }
     .rightbar { background: var(--chrome); }
@@ -148,25 +158,20 @@
         data-on:click="$draft = $title; $renameMode = 'title'; $renaming = true"></span>
       <span class="mode-badge" id="mode-badge">navigate</span>
     </div>
-    <div class="middle">
-      <div class="term-wrap">
-        <!-- Projection grid. data-sid mirrors $selectedSid onto #screen (the
-             scroll container the server never morphs); a MutationObserver
-             resizes the newly-focused pty to the pane on switch. The view
-             SSE itself is re-pointed by the body data-effect above. -->
-        <div
-          id="screen"
-          data-attr:data-sid="$selectedSid"
-          data-effect="$selectedSid && @get('/pty/view?sid=' + $selectedSid, {openWhenHidden: true})"
-        ><div id="grid"></div></div>
-      </div>
-      <div class="rightbar"></div>
-    </div>
+    <!-- Continuous document of session panes. The server fills #doc on init
+         and appends/removes panes as sessions come and go; each pane opens
+         its own view stream and mounts terminal.js. Selection highlight is
+         reactive via data-class on $selectedSid. -->
+    <div id="doc" class="doc"></div>
     <footer class="statusbar" aria-label="Status">
-      <span></span>
-      <span data-text="$termCols > 0 ? ($termCols + 'x' + $termRows) : ''"></span>
+      <span data-text="$selectedSid ? ('sid ' + $selectedSid.slice(0,8)) : ''"></span>
     </footer>
   </main>
+
+  <!-- Scroll the active pane into view (stacks-style offset) whenever the
+       selection changes. Lives in the static shell so the server never
+       morphs it away; data-effect fires on $selectedSid change. -->
+  <div data-effect="window.__onSelect && window.__onSelect($selectedSid)" style="display:none"></div>
 
   <!-- Server-pushed canvas pane. Empty -> collapses to 0 width. -->
   <section id="canvas" class="canvas"></section>
@@ -206,38 +211,44 @@
       if (w) document.body.style.setProperty('--canvas-w', w);
     }
 
-    const screen = document.getElementById('screen');
-    const grid = document.getElementById('grid');
+    const doc = document.getElementById('doc');
+    const PANE_ROWS = 24;
 
-    // Terminal mechanics. onResize POSTs for whichever sid is currently
-    // mirrored onto #screen (data-sid), so a resize always targets the
-    // focused pty. The pane geometry also changes when the sidebar/canvas
-    // resize -- the ResizeObserver inside mountTerminal catches that.
-    const term = mountTerminal({
-      screen,
-      grid,
-      onResize: (cols, rows) => {
-        const sid = screen.dataset.sid;
-        if (!sid) return;
-        fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ cols, rows }),
-        }).catch(() => {});
-      },
-    });
-
-    // Session switch: $selectedSid -> #screen[data-sid] changes; re-measure
-    // and resize the newly-focused pty to the current pane so its first
-    // frame is sized right (the body data-effect re-points the view SSE).
-    new MutationObserver(() => term.syncNow()).observe(screen, {
-      attributes: true,
-      attributeFilter: ['data-sid'],
-    });
-    // The observer may attach after Datastar has already mirrored the initial
-    // $selectedSid onto data-sid, missing that first transition. Size the
-    // already-selected pty to the pane once on startup.
-    if (screen.dataset.sid) term.syncNow();
+    // Mount terminal.js on each pane as the server appends it; tear down on
+    // removal. Each pane is a fixed PANE_ROWS-tall live terminal sized to
+    // the document width. Resizing a pane POSTs /pty/resize for its sid.
+    const mounted = new Map(); // sid -> terminal handle
+    function mountPane(pane) {
+      const sid = pane.dataset.sid;
+      if (!sid || mounted.has(sid)) return;
+      const screen = pane.querySelector('.pane-screen');
+      const grid = pane.querySelector('[id^="grid-"]');
+      if (!screen || !grid) return;
+      const term = mountTerminal({
+        screen,
+        grid,
+        fixedRows: PANE_ROWS,
+        onResize: (cols, rows) => {
+          fetch('/pty/resize?sid=' + encodeURIComponent(sid), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ cols, rows }),
+          }).catch(() => {});
+        },
+      });
+      mounted.set(sid, term);
+      // Size the pty to the pane now that it's measured.
+      term.syncNow();
+    }
+    function scanPanes() {
+      doc.querySelectorAll('.pane').forEach(mountPane);
+      // Drop handles for panes the server removed.
+      for (const sid of [...mounted.keys()]) {
+        if (!doc.querySelector('#pane-' + CSS.escape(sid))) mounted.delete(sid);
+      }
+    }
+    new MutationObserver(scanPanes).observe(doc, { childList: true });
+    scanPanes();
 
     // Sidebar copy-sid button (delegated; rows are re-rendered by datastar).
     document.addEventListener('click', (e) => {
@@ -282,9 +293,8 @@
         document.querySelector('#sessions-list .new-btn')?.click();
       },
       closeSelected() {
-        const sid = screen.dataset.sid;
-        if (!sid) return;
-        fetch('/pty/close?sid=' + encodeURIComponent(sid), { method: 'POST' }).catch(() => {});
+        if (!currentSid()) return;
+        fetch('/pty/close?sid=' + encodeURIComponent(currentSid()), { method: 'POST' }).catch(() => {});
       },
       cycle(dir) {
         const items = [...document.querySelectorAll('#sessions-list li')];
@@ -307,8 +317,21 @@
       },
       focus() {
         // Enter the focused terminal only if one is selected.
-        if (screen.dataset.sid) setMode('focus');
+        if (currentSid()) setMode('focus');
       },
+    };
+
+    // The selected sid, read straight from the active pane (datastar sets
+    // .active reactively from $selectedSid). Reading the DOM avoids any race
+    // with caching the signal in JS. __onSelect (data-effect in the shell)
+    // handles scroll + dropping focus when the selection empties.
+    const currentSid = () => doc.querySelector('.pane.active')?.dataset.sid || '';
+    window.__onSelect = (sid) => {
+      if (sid) {
+        const pane = doc.querySelector('#pane-' + CSS.escape(sid));
+        if (pane) doc.scrollTop = pane.offsetTop - doc.offsetTop - 2.5 * 17;
+      }
+      if (mode === 'focus' && !sid) setMode('navigate');
     };
 
     // Modal interaction: navigate vs focus. In navigate mode the terminal is
@@ -327,12 +350,6 @@
       badge.textContent = m;
     }
     setMode('navigate');
-
-    // A session that goes away (close, or the selection moving off it) drops
-    // focus back to navigate so keystrokes can't land on a dead sid.
-    new MutationObserver(() => {
-      if (mode === 'focus' && !screen.dataset.sid) setMode('navigate');
-    }).observe(screen, { attributes: true, attributeFilter: ['data-sid'] });
 
     // Combo normalization. macOS substitutes a glyph for e.key when Alt is
     // held (option+d -> the partial-derivative sign); fall back to e.code

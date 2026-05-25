@@ -148,6 +148,28 @@ def render-list [ptys: list, selected: string]: nothing -> string {
   $"<aside id='sessions-list'><header>Sessions <button type='button' class='new-btn' data-on:click=\"@post\('/pty/new'\)\" title='New session'>+</button></header><ul>($items)</ul></aside>"
 }
 
+# Render one continuous-document pane for a session. Each pane is a fixed
+# 24-row live terminal: a stable #pane-<sid> wrapper, a header, and a
+# #screen-<sid>/#grid-<sid> whose data-effect opens that session's own view
+# stream (--target so the grids don't collide, nosig so the per-frame
+# signals don't clobber across panes). The active highlight is reactive on
+# the $selectedSid signal, so selection changes need no server patch.
+def render-pane [p: record]: nothing -> string {
+  let sid = $p.sid
+  let label = $p.meta.label? | default "nu"
+  let view = $"@get\('/pty/view?sid=($sid)&target=grid-($sid)&nosig=1', {openWhenHidden: true}\)"
+  let onsel = $"$sid = '($sid)'; @post\('/nav'\)"
+  $"<section class='pane' id='pane-($sid)' data-sid='($sid)' data-class:active=\"$selectedSid == '($sid)'\"><header class='pane-head' data-on:click=\"($onsel)\">($label)<small>($sid | str substring 0..8)</small></header><div id='screen-($sid)' class='pane-screen' data-effect=\"($view)\"><div id='grid-($sid)'></div></div></section>"
+}
+
+# Full continuous document: every session's pane stacked. Used on init; later
+# structural changes are append/remove of single panes so live grids aren't
+# clobbered by a re-render.
+def render-doc [ptys: list]: nothing -> string {
+  let panes = $ptys | sort-by last_input_ms -r | each {|p| render-pane $p } | str join ""
+  $"<div id='doc' class='doc'>($panes)</div>"
+}
+
 # Look up the focused session's "cols x rows" string. Returns "" when no
 # session is selected (or the sid has gone away). Used to drive the
 # $focusedDims signal that the bottom-right meta corner mirrors.
@@ -270,7 +292,22 @@ def focused-dims [ptys: list, selected: string]: nothing -> string {
             ($"<section id='canvas' class='canvas'>($inner)</section>"
              | to datastar-patch-elements --selector "#canvas")
           } else { null }
-          let out = ([$sel_patch $dims_patch $title_patch $list_patch $canvas_patch] | where {|x| $x != null})
+          # Continuous document. Init renders the whole #doc; a created
+          # session appends just its pane; a died/deleted session removes
+          # its pane. Never re-render the whole #doc on other events -- that
+          # would morph empty grids over the live ones. Selection highlight
+          # is reactive (data-class on $selectedSid), so nav needs no patch.
+          let doc_patch = if $ev.kind == "init" {
+            (render-doc $live | to datastar-patch-elements --selector "#doc")
+          } else if ($ev.kind == "pty" and ($ev.val.event? == "created")) {
+            let p = ($live | where sid == ($ev.val.sid? | default "") | get 0?)
+            if $p == null { null } else {
+              (render-pane $p | to datastar-patch-elements --selector "#doc" --mode "append")
+            }
+          } else if ($ev.kind == "pty" and (($ev.val.event? | default "") in ["died" "deleted"])) {
+            ("<span></span>" | to datastar-patch-elements --selector $"#pane-($ev.val.sid)" --mode "remove")
+          } else { null }
+          let out = ([$sel_patch $dims_patch $title_patch $list_patch $canvas_patch $doc_patch] | where {|x| $x != null})
           {out: $out, next: {sel: $new_sel, dims: $new_dims, title: $new_title, canvas: $new_canvas}}
         } {sel: $initial_sid, dims: "", title: (load-title), canvas: (load-canvas $initial_sid)}
       | flatten
