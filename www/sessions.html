@@ -60,6 +60,21 @@
        wants (fixedRows * cell height), so the pane sizes itself -- no calc,
        no absolute positioning. Scrollback scrolls within this box. */
     .pane-screen { flex: 0 0 auto; overflow-y: auto; overflow-x: hidden; background: var(--term-bg); }
+    /* Note panes: a <pre> for display, swapped for a <textarea> while editing.
+       Both share the terminal font and the pane background (no white box, no
+       border) so editing blends into the surface. The editor fills the pane
+       width and grows with its content (JS sets height from scrollHeight),
+       with a few-row floor so a new note has room. */
+    .note-body { background: var(--term-bg); }
+    .note-pre, .note-edit {
+      display: block; width: 100%; box-sizing: border-box; margin: 0;
+      padding: .25rem .6rem;
+      background: var(--term-bg); color: var(--term-fg);
+      font-family: var(--term-font); font-size: 14px; line-height: var(--cell-h);
+      white-space: pre-wrap; word-break: break-word;
+      min-height: calc(var(--cell-h) * 3);
+    }
+    .note-edit { border: 0; outline: none; resize: none; overflow: hidden; }
     /* The active (selected) pane is highlighted. In navigate mode every pane
        is dimmed (read-only); focus mode lights the active one fully. */
     .pane.active { border-color: var(--sel-blur); }
@@ -285,6 +300,11 @@
       mounted.set(cid, term);
       term.syncNow();
     }
+    // Size a note editor to its content height (CSS min-height is the floor).
+    function growNote(ta) {
+      ta.style.height = 'auto';
+      ta.style.height = ta.scrollHeight + 'px';
+    }
     function wireNotePane(pane) {
       if (pane.dataset.noteWired) return;
       pane.dataset.noteWired = '1';
@@ -302,6 +322,9 @@
           method: 'POST', headers: { 'content-type': 'text/plain' }, body: ta.value,
         }).catch(() => {});
       });
+      // Grow the editor to fit its content so there is no inner scrollbar --
+      // the note flows with the document. __focusClip sizes it on show too.
+      ta.addEventListener('input', () => growNote(ta));
       // A freshly created note arrives empty -- focus it (== edit it) straight
       // away. __onSelect would do this too, but only in focus mode and only
       // once $selectedSid arrives, which can race the pane's DOM append; the
@@ -513,6 +536,7 @@
           ta.style.display = '';
           if (pre) pre.style.display = 'none';
           ta.focus();
+          growNote(ta);
         }
         setMode('focus');
         return;

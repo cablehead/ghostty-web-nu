@@ -38,6 +38,15 @@ await page.keyboard.type("second line");
 const taVal = await page.evaluate(()=>document.querySelector('#doc .pane[data-kind="note"] .note-edit')?.value);
 console.log("textarea value:", JSON.stringify(taVal), "| multiline ok:", taVal===NOTE, "(want true)");
 
+// Editor fills the pane width and blends into the pane background (no white box).
+const style = await page.evaluate(()=>{
+  const pane=document.querySelector('#doc .pane[data-kind="note"]');
+  const ta=pane.querySelector('.note-edit'), cs=getComputedStyle(ta);
+  return { taW: Math.round(ta.getBoundingClientRect().width), paneW: Math.round(pane.getBoundingClientRect().width),
+           bg: cs.backgroundColor, paneBg: getComputedStyle(pane).backgroundColor, border: cs.borderTopWidth };
+});
+console.log("full width:", Math.abs(style.taW-style.paneW)<=2, "| blends:", style.bg===style.paneBg, "| no border:", style.border==='0px', JSON.stringify(style));
+
 // Escape ends editing -> renders as <pre>, hides textarea, persists.
 await page.keyboard.press('Escape');
 await new Promise(r=>setTimeout(r,400));
