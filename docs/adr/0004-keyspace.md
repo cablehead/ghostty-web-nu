@@ -30,7 +30,7 @@ edit), and navigate honors the non-`Alt` keymap (Enter = focus).
 
 - **`Alt` is the app modifier.** It's largely free of browser/OS reservation.
   Making the `Alt` chords global means clip management (new/close/cycle/
-  rename/width) never requires first leaving a focused pane -- you can
+  rename/height) never requires first leaving a focused pane -- you can
   `Alt+J`/`Alt+K` straight from one focused terminal into the next. The cost
   is that the terminal layer no longer sees `Alt`+letter (some TUIs use
   Meta-bindings); we accept that for the seamless management flow, and
@@ -62,7 +62,7 @@ App chords (fire in any mode):
 | `Alt+J`/`Alt+K` | Next / previous clip         |
 | `Alt+R`       | Rename current tab             |
 | `Alt+Shift+R` | Rename window title            |
-| `Alt+O`       | Cycle current pane width       |
+| `Alt+O`       | Cycle current terminal pane height |
 
 Mode-specific:
 

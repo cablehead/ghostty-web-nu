@@ -117,5 +117,17 @@ export function mountTerminal({ screen, grid, onResize, fixedRows }) {
       onResize?.(d.cols, d.rows);
       return d;
     },
+    // Change the pane's fixed row count (Alt+O height cycle) and reflow: the
+    // scroll container grows/shrinks to the new height and the pty is resized
+    // to match. Cols are unchanged (width is still pane-driven).
+    setFixedRows(n) {
+      fixedRows = n;
+      cell = measureCell();
+      const d = dims();
+      applyHeight(d.rows);
+      lastKey = `${d.cols}x${d.rows}`;
+      onResize?.(d.cols, d.rows);
+      return d;
+    },
   };
 }

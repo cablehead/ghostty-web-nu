@@ -166,7 +166,7 @@
     "rename":    "window.app.openRename()",
     "renameTab": "window.app.openRenameTab()",
     "focus":     "window.app.focus()",
-    "cycleWidth":"window.app.cycleWidth()"
+    "cycleHeight":"window.app.cycleHeight()"
   }'
   data-keymap='{
     "enter": "focus",
@@ -176,7 +176,7 @@
     "alt+k": "prev",
     "alt+r": "renameTab",
     "alt+shift+r": "rename",
-    "alt+o": "cycleWidth"
+    "alt+o": "cycleHeight"
   }'
 >
   <!-- Server overwrites this on every event. -->
@@ -417,21 +417,25 @@
         const cid = currentClip();
         if (cid) window.__focusClip(cid);
       },
-      cycleWidth() {
-        // Cycle the active pane's width: full -> 5ch -> 24ch -> 2/3 -> full.
-        // terminal.js's ResizeObserver reflows the pty to the new width.
+      cycleHeight() {
+        // Cycle the active terminal pane's height (rows): default -> compact
+        // -> 2/3 of the document -> full document -> default. terminal.js
+        // resizes the pty to match. Width stays pane-driven; notes auto-grow,
+        // so this is a terminal-only chord.
         const cid = currentClip();
         if (!cid) return;
-        const pane = doc.querySelector('#pane-' + CSS.escape(cid));
-        if (!pane) return;
-        const sizes = ['', '5ch', '24ch', '66%']; // '' = full (flex stretch)
-        const next = ((widthIdx.get(cid) ?? 0) + 1) % sizes.length;
-        widthIdx.set(cid, next);
-        pane.style.width = sizes[next];
+        const term = mounted.get(cid);
+        if (!term || !term.setFixedRows) return;
+        const cellH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell-h'), 10) || 17;
+        const fullRows = Math.max(6, Math.floor(doc.clientHeight / cellH));
+        const sizes = [PANE_ROWS, 8, Math.max(6, Math.floor(fullRows * 2 / 3)), fullRows];
+        const next = ((heightIdx.get(cid) ?? 0) + 1) % sizes.length;
+        heightIdx.set(cid, next);
+        term.setFixedRows(sizes[next]);
       },
     };
-    // Per-clip width-cycle index for cycleWidth().
-    const widthIdx = new Map();
+    // Per-clip height-cycle index for cycleHeight().
+    const heightIdx = new Map();
 
     // The selected clip id, read from the active pane (datastar sets .active
     // reactively from $selectedSid, which now holds the selected clip id).
@@ -471,7 +475,7 @@
       { label: 'New', keys: ['Alt', 'T'], run: () => window.app.newSession() },
       { label: 'Close', keys: ['Alt', 'D'], run: () => window.app.closeSelected() },
       { label: 'Rename', keys: ['Alt', 'R'], run: () => window.app.openRenameTab() },
-      { label: 'Width', keys: ['Alt', 'O'], run: () => window.app.cycleWidth() },
+      { label: 'Height', keys: ['Alt', 'O'], run: () => window.app.cycleHeight() },
     ];
     const bindingsByMode = {
       navigate: [
