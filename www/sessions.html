@@ -128,7 +128,7 @@
   </style>
 </head>
 <body
-  data-signals='{"selectedSid":"","connId":"","sid":"","sel":"","termCols":0,"termRows":0,"termTitle":"","title":{{ title | default("") | tojson | e }},"docReady":false,"renaming":false,"renameMode":"title","draft":"","label":""}'
+  data-signals='{"selectedSid":"","connId":"","sid":"","sel":"","termCols":0,"termRows":0,"termTitle":"","focusedDims":"","title":{{ title | default("") | tojson | e }},"docReady":false,"renaming":false,"renameMode":"title","draft":"","label":""}'
   data-init="@get('/sse')"
   data-effect="document.title = $title || 'ghostty-web-nu sessions'"
   data-actions='{
@@ -169,6 +169,7 @@
     <div id="doc" class="doc"></div>
     <footer class="statusbar" aria-label="Status">
       <span data-text="$selectedSid ? ('sid ' + $selectedSid.slice(0,8)) : ''"></span>
+      <span data-text="$focusedDims"></span>
     </footer>
   </main>
 
