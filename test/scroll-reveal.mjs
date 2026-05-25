@@ -27,6 +27,6 @@ async function check(label){
   console.log(label, JSON.stringify(r));
 }
 await check("initial active");
-for(let i=0;i<3;i++){ await pg.keyboard.press('Alt+j'); await new Promise(r=>setTimeout(r,400)); await check("after Alt+J #"+(i+1)); }
-for(let i=0;i<2;i++){ await pg.keyboard.press('Alt+k'); await new Promise(r=>setTimeout(r,400)); await check("after Alt+K #"+(i+1)); }
+for(let i=0;i<3;i++){ await pg.keyboard.press('Alt+j'); await new Promise(r=>setTimeout(r,800)); await check("after Alt+J #"+(i+1)); }
+for(let i=0;i<2;i++){ await pg.keyboard.press('Alt+k'); await new Promise(r=>setTimeout(r,800)); await check("after Alt+K #"+(i+1)); }
 await br.close(); process.exit(0);

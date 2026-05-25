@@ -337,7 +337,7 @@
         // viewport bottom (shows the bottom even when the pane is taller than
         // the viewport); scroll-margin on .pane adds breathing room.
         const pane = doc.querySelector('#pane-' + CSS.escape(sid));
-        if (pane) pane.scrollIntoView({ block: 'end' });
+        if (pane) pane.scrollIntoView({ block: 'end', behavior: 'smooth' });
       }
       if (mode === 'focus' && !sid) setMode('navigate');
     };
