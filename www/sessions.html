@@ -417,6 +417,13 @@
         const cid = currentClip();
         if (cid) window.__focusClip(cid);
       },
+      toggleFocus() {
+        // mod+Enter symmetric toggle: leave focus if focused (a note blurs and
+        // saves on the way out), otherwise focus the selected clip.
+        if (mode === 'focus') { setMode('navigate'); return; }
+        const cid = currentClip();
+        if (cid) window.__focusClip(cid);
+      },
       cycleHeight() {
         // Cycle the active terminal pane's height (rows): default -> compact
         // -> 2/3 of the document -> full document -> default. terminal.js
@@ -468,9 +475,12 @@
     // ASCII labels (project convention) rather than glyphs.
     const statusMode = document.getElementById('status-mode');
     const statusBindings = document.getElementById('status-bindings');
-    // App chords (Alt-prefixed) are global, so both modes list them. Each mode
-    // adds its own entry/exit: navigate offers Enter to focus the selection,
-    // focus offers Alt+Esc back to navigate.
+    // App chords (Alt-prefixed) are global, so both modes list them. The
+    // mod+Enter focus toggle is the canonical entry/exit (bare Enter and
+    // Alt+Esc still work as aliases). The mod key is Cmd on macOS, Ctrl
+    // elsewhere -- both are mapped; the label follows the platform.
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+    const modLabel = isMac ? 'Cmd' : 'Ctrl';
     const appChords = [
       { label: 'New', keys: ['Alt', 'T'], run: () => window.app.newSession() },
       { label: 'Close', keys: ['Alt', 'D'], run: () => window.app.closeSelected() },
@@ -480,11 +490,11 @@
     const bindingsByMode = {
       navigate: [
         ...appChords,
-        { label: 'Focus', keys: ['Enter'], run: () => window.app.focus() },
+        { label: 'Focus', keys: [modLabel, 'Enter'], run: () => window.app.toggleFocus() },
       ],
       focus: [
         ...appChords,
-        { label: 'Navigate', keys: ['Alt', 'Esc'], run: () => setMode('navigate') },
+        { label: 'Navigate', keys: [modLabel, 'Enter'], run: () => window.app.toggleFocus() },
       ],
     };
     function renderBindings(m) {
@@ -617,6 +627,16 @@
         e.preventDefault();
         e.stopPropagation();
         setMode('navigate');
+        return;
+      }
+      // mod+Enter: the focus toggle, in any mode (Cmd on macOS, Ctrl else --
+      // both mapped). key-buffer drops Meta combos and a plain terminal can't
+      // tell Ctrl+Enter from Enter, so intercepting it costs the pty nothing.
+      // While editing a note this commits and leaves (setMode blurs -> saves).
+      if (combo === 'cmd+enter' || combo === 'ctrl+enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.app.toggleFocus();
         return;
       }
       // Alt app-chords: active in every mode. Save a note being edited first

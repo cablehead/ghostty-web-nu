@@ -63,13 +63,19 @@ App chords (fire in any mode):
 | `Alt+R`       | Rename current tab             |
 | `Alt+Shift+R` | Rename window title            |
 | `Alt+O`       | Cycle current terminal pane height |
+| `mod+Enter`   | Toggle focus (enter/leave); `mod` = Cmd on macOS, Ctrl else |
 
-Mode-specific:
+`mod+Enter` is the canonical focus toggle. It is safe in any mode because
+key-buffer drops every Meta combo (so Cmd+Enter never reaches the pty) and a
+plain terminal cannot distinguish Ctrl+Enter from Enter (so intercepting it
+costs the pty nothing). Both `cmd+enter` and `ctrl+enter` are mapped.
+
+Mode-specific (aliases of the toggle / fall-through):
 
 | Chord     | Mode     | Action                              |
 | --------- | -------- | ----------------------------------- |
-| `Enter`   | navigate | Focus the selected pane             |
-| `Alt+Esc` | focus    | Back to navigate mode               |
+| `Enter`   | navigate | Focus the selected pane (alias)     |
+| `Alt+Esc` | focus    | Back to navigate mode (alias)       |
 | (non-Alt) | focus    | forwarded to the focused pty / note |
 
 The status bar lists the active mode's chords and they are clickable, so the

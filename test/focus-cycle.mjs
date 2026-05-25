@@ -49,4 +49,13 @@ const r = await pg.evaluate((s)=>{
   };
 }, {second:secondClip, first:firstClip});
 console.log("MARKB only in 2nd:", r.bInSecond && !r.bInFirst, "| MARKA only in 1st:", r.aInFirst && !r.aInSecond, JSON.stringify(r));
+
+// mod+Enter toggles focus both ways (Ctrl+Enter here -- mapped alongside Cmd).
+await pg.keyboard.press('Control+Enter');
+await new Promise(r=>setTimeout(r,300));
+const afterLeave = await mode();
+await pg.keyboard.press('Control+Enter');
+await new Promise(r=>setTimeout(r,300));
+const afterEnter = await mode();
+console.log("mod+Enter leave -> :", afterLeave, "(want navigate) | mod+Enter enter -> :", afterEnter, "(want focus)");
 await br.close(); process.exit(0);
