@@ -165,11 +165,9 @@
     "prev":      "window.app.cycle(-1)",
     "rename":    "window.app.openRename()",
     "renameTab": "window.app.openRenameTab()",
-    "focus":     "window.app.focus()",
     "cycleHeight":"window.app.cycleHeight()"
   }'
   data-keymap='{
-    "enter": "focus",
     "alt+t": "new",
     "alt+d": "close",
     "alt+j": "next",
@@ -411,15 +409,10 @@
         trig.dataset.label = label;
         trig.click();
       },
-      focus() {
-        // Enter/focus the selected clip (terminal -> focus mode + key-buffer;
-        // note -> edit its textarea).
-        const cid = currentClip();
-        if (cid) window.__focusClip(cid);
-      },
       toggleFocus() {
-        // mod+Enter symmetric toggle: leave focus if focused (a note blurs and
-        // saves on the way out), otherwise focus the selected clip.
+        // mod+Enter symmetric toggle (the only focus entry/exit): leave focus
+        // if focused (a note blurs and saves on the way out), otherwise focus
+        // the selected clip.
         if (mode === 'focus') { setMode('navigate'); return; }
         const cid = currentClip();
         if (cid) window.__focusClip(cid);
@@ -464,10 +457,10 @@
     };
 
     // Modal interaction: navigate vs focus. In navigate mode the terminal is
-    // greyed and key-buffer is off, so the full keymap (Alt+T/D/J/K/R, Enter)
-    // is live and nothing leaks to the pty. Enter focuses the selected
-    // terminal -> key-buffer on, keys route to the pty, and only Alt+Esc
-    // (not plain Esc, which TUIs need) returns to navigate.
+    // greyed and key-buffer is off, so the app keymap (Alt+T/D/J/K/R/O) is live
+    // and nothing leaks to the pty. mod+Enter focuses the selected terminal ->
+    // key-buffer on, keys route to the pty (plain Esc and Enter included), and
+    // mod+Enter returns to navigate.
     const keybuf = document.querySelector('key-buffer');
 
     // Modal status bar. Each mode lists its clickable key bindings in the
@@ -476,9 +469,9 @@
     const statusMode = document.getElementById('status-mode');
     const statusBindings = document.getElementById('status-bindings');
     // App chords (Alt-prefixed) are global, so both modes list them. The
-    // mod+Enter focus toggle is the canonical entry/exit (bare Enter and
-    // Alt+Esc still work as aliases). The mod key is Cmd on macOS, Ctrl
-    // elsewhere -- both are mapped; the label follows the platform.
+    // mod+Enter focus toggle is the only focus entry/exit. The mod key is Cmd
+    // on macOS, Ctrl elsewhere -- both are mapped; the label follows the
+    // platform.
     const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
     const modLabel = isMac ? 'Cmd' : 'Ctrl';
     const appChords = [
@@ -538,7 +531,7 @@
     // data-sid), enable it, and enter focus mode so typing lands immediately.
     // Note: focusing a note IS editing it -- show the textarea, silence
     // key-buffer (the textarea owns keys), focus it, and still enter focus
-    // mode so Alt+J/K carries on to the next pane and Alt+Esc leaves.
+    // mode so Alt+J/K carries on to the next pane and mod+Enter leaves.
     window.__focusClip = (cid) => {
       if (!cid) return;
       const pane = doc.querySelector('#pane-' + CSS.escape(cid));
@@ -609,8 +602,9 @@
     //   editing a note -- the textarea owns them (Enter = newline, Escape ends
     //                      the edit by blurring; the blur handler renders the
     //                      <pre> and persists).
-    //   focused terminal -- everything (plain Esc included) goes to the pty.
-    //   navigate         -- the non-Alt keymap applies (Enter focuses).
+    //   focused terminal -- everything (plain Esc and Enter included) goes to
+    //                        the pty; mod+Enter is the only exit.
+    //   navigate         -- no non-Alt bindings today (mod+Enter focuses).
     // The modal-input guard keeps the rename field's own Enter/Esc/typing.
     function runAction(id) {
       const js = readJson('actions')[id];
@@ -622,17 +616,11 @@
       const combo = comboKey(e);
       const editingNote = document.activeElement?.classList.contains('note-edit');
 
-      // Alt+Esc: drop focus -> navigate, in any mode.
-      if (combo === 'alt+escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        setMode('navigate');
-        return;
-      }
-      // mod+Enter: the focus toggle, in any mode (Cmd on macOS, Ctrl else --
-      // both mapped). key-buffer drops Meta combos and a plain terminal can't
-      // tell Ctrl+Enter from Enter, so intercepting it costs the pty nothing.
-      // While editing a note this commits and leaves (setMode blurs -> saves).
+      // mod+Enter: the only focus toggle, in any mode (Cmd on macOS, Ctrl else
+      // -- both mapped). key-buffer drops Meta combos and a plain terminal
+      // can't tell Ctrl+Enter from Enter, so intercepting it costs the pty
+      // nothing. While editing a note this commits and leaves (setMode blurs
+      // -> saves). Plain Esc and Enter are left entirely to the focused pty.
       if (combo === 'cmd+enter' || combo === 'ctrl+enter') {
         e.preventDefault();
         e.stopPropagation();
@@ -658,7 +646,7 @@
         return; // textarea owns the rest, including Enter for a newline
       }
       if (mode === 'focus') return; // focused terminal: pty owns everything
-      const id = readJson('keymap')[combo]; // navigate: Enter -> focus, etc.
+      const id = readJson('keymap')[combo]; // navigate: any non-Alt binding
       if (!id) return;
       e.preventDefault();
       e.stopPropagation();

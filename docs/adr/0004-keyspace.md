@@ -39,8 +39,10 @@ edit), and navigate honors the non-`Alt` keymap (Enter = focus).
   `Alt+K`, or clicking a sidebar clip) auto-focuses the newly selected pane:
   a terminal gets key-buffer/pty, a note opens its editor. Navigate mode
   never auto-focuses -- it's read-only browsing.
-- **`Alt+Esc` is the focus->navigate escape.** Plain `Esc` goes to the pty;
-  `Alt+Esc` drops focus from any mode.
+- **`mod+Enter` is the only focus toggle.** It both enters focus (on the
+  selected clip) and leaves it, from any mode. Plain `Esc` and plain `Enter`
+  go entirely to the focused pty -- there is no bare-key or `Alt+Esc` focus
+  shortcut. `mod` is `Cmd` on macOS, `Ctrl` elsewhere; both are mapped.
 - **macOS Option produces glyphs** (Option+O -> "o-slash"). `comboKey`
   normalizes via `e.code` (`KeyO` -> `o`) and the handlers `preventDefault`,
   so detection is consistent across Chrome/Firefox/Safari and nothing gets
@@ -65,17 +67,16 @@ App chords (fire in any mode):
 | `Alt+O`       | Cycle current terminal pane height |
 | `mod+Enter`   | Toggle focus (enter/leave); `mod` = Cmd on macOS, Ctrl else |
 
-`mod+Enter` is the canonical focus toggle. It is safe in any mode because
+`mod+Enter` is the only focus toggle. It is safe in any mode because
 key-buffer drops every Meta combo (so Cmd+Enter never reaches the pty) and a
 plain terminal cannot distinguish Ctrl+Enter from Enter (so intercepting it
 costs the pty nothing). Both `cmd+enter` and `ctrl+enter` are mapped.
 
-Mode-specific (aliases of the toggle / fall-through):
+Fall-through (no chord -- the pty/textarea owns these):
 
 | Chord     | Mode     | Action                              |
 | --------- | -------- | ----------------------------------- |
-| `Enter`   | navigate | Focus the selected pane (alias)     |
-| `Alt+Esc` | focus    | Back to navigate mode (alias)       |
+| `Esc`/`Enter` | focus | forwarded to the focused pty        |
 | (non-Alt) | focus    | forwarded to the focused pty / note |
 
 The status bar lists the active mode's chords and they are clickable, so the

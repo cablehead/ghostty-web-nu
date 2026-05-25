@@ -22,10 +22,10 @@ await pg.waitForFunction(()=>document.querySelectorAll('#doc .pane').length>=2,{
 await new Promise(r=>setTimeout(r,700));
 
 // Focus the selected (2nd) terminal and type a marker into it.
-await pg.keyboard.press('Enter');
+await pg.keyboard.press('Control+Enter');
 await new Promise(r=>setTimeout(r,200));
 const secondClip = await activeClip();
-console.log("after Enter mode:", await mode(), "(want focus)");
+console.log("after mod+Enter mode:", await mode(), "(want focus)");
 await pg.keyboard.type('echo MARKB'); await pg.keyboard.press('Enter');
 await new Promise(r=>setTimeout(r,500));
 

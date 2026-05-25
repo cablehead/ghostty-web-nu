@@ -31,9 +31,9 @@ console.log("after Alt+T->Terminal panes:", await panes(), "live:", await liveGr
 // Focus the selected pane, type -> should land in the active pane's pty
 const activeSid = await page.evaluate(()=>document.querySelector('#doc .pane.active .pane-screen')?.dataset.sid);
 console.log("active sid:", activeSid?.slice(0,8));
-await page.keyboard.press('Enter'); // focus
+await page.keyboard.press('Control+Enter'); // mod+Enter: focus
 await new Promise(r=>setTimeout(r,200));
-console.log("mode after Enter:", await page.evaluate(()=>document.getElementById('status-mode').textContent));
+console.log("mode after mod+Enter:", await page.evaluate(()=>document.getElementById('status-mode').textContent));
 await page.keyboard.type('echo DOCMARK');
 await page.keyboard.press('Enter');
 await new Promise(r=>setTimeout(r,600));
@@ -44,9 +44,9 @@ const markIn = await page.evaluate(()=>{
 const markCount = await page.evaluate(()=>[...document.querySelectorAll('#doc .pane')].filter(p=>p.textContent.includes('DOCMARK')).length);
 console.log("DOCMARK in active pane:", markIn, "| total panes with DOCMARK (want 1):", markCount);
 
-await page.keyboard.press('Alt+Escape');
+await page.keyboard.press('Control+Enter');
 await new Promise(r=>setTimeout(r,200));
-console.log("mode after Alt+Esc:", await page.evaluate(()=>document.getElementById('status-mode').textContent));
+console.log("mode after mod+Enter leave:", await page.evaluate(()=>document.getElementById('status-mode').textContent));
 
 // Rename from navigate must not leak keys to any pane's pty.
 await page.keyboard.press('Alt+r');
