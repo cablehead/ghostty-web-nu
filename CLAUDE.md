@@ -1,6 +1,7 @@
 ## Git Commit Style Preferences
 
-**NEVER commit unless explicitly asked by the user.**
+**Commit and push after each stable change** (tests pass / verified working) --
+no need to wait to be asked. Do not commit half-finished or red-test states.
 
 When committing: review `git diff`
 
